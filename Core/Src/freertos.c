@@ -94,11 +94,21 @@ const osThreadAttr_t nmosTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
+static void App_FailFastIfThreadCreateFailed(osThreadId_t thread_handle);
+
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+static void App_FailFastIfThreadCreateFailed(osThreadId_t thread_handle)
+{
+  if (thread_handle == NULL)
+  {
+    Error_Handler();
+  }
+}
 
 /**
   * @brief  FreeRTOS initialization
@@ -131,14 +141,20 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  App_FailFastIfThreadCreateFailed(defaultTaskHandle);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   atTaskHandle = osThreadNew(App_AtTask, NULL, &atTask_attributes);
+  App_FailFastIfThreadCreateFailed(atTaskHandle);
   sensorTaskHandle = osThreadNew(App_SensorTask, NULL, &sensorTask_attributes);
+  App_FailFastIfThreadCreateFailed(sensorTaskHandle);
   motorTaskHandle = osThreadNew(App_MotorTask, NULL, &motorTask_attributes);
+  App_FailFastIfThreadCreateFailed(motorTaskHandle);
   ledTaskHandle = osThreadNew(App_LedTask, NULL, &ledTask_attributes);
+  App_FailFastIfThreadCreateFailed(ledTaskHandle);
   nmosTaskHandle = osThreadNew(App_NmosTask, NULL, &nmosTask_attributes);
+  App_FailFastIfThreadCreateFailed(nmosTaskHandle);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

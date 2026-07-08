@@ -5,30 +5,44 @@
 
 #define APP_AT_PROTOCOL_MAX_LINE_LENGTH 48U
 
-static size_t AppAtProtocol_Normalize(const char *input, char *output, size_t output_size)
+static bool AppAtProtocol_ValidateFrame(const char *input, size_t *body_length)
 {
-    size_t input_index = 0U;
-    size_t output_index = 0U;
+    size_t input_length = 0U;
+    size_t index = 0U;
 
-    if ((input == NULL) || (output == NULL) || (output_size == 0U))
+    if ((input == NULL) || (body_length == NULL))
     {
-        return 0U;
+        return false;
     }
 
-    while ((input[input_index] != '\0') && (output_index + 1U < output_size))
+    input_length = strlen(input);
+    if ((input_length < 5U) || (input_length >= APP_AT_PROTOCOL_MAX_LINE_LENGTH))
     {
-        char current = input[input_index++];
+        return false;
+    }
 
-        if ((current == '\r') || (current == '\n') || (current == ' ') || (current == '\t'))
+    if ((input[input_length - 2U] != '\r') || (input[input_length - 1U] != '\n'))
+    {
+        return false;
+    }
+
+    for (index = 0U; index < (input_length - 2U); ++index)
+    {
+        char current = input[index];
+
+        if ((current == ' ') || (current == '\t') || (current == '\r') || (current == '\n'))
         {
-            continue;
+            return false;
         }
 
-        output[output_index++] = current;
+        if ((current >= 'a') && (current <= 'z'))
+        {
+            return false;
+        }
     }
 
-    output[output_index] = '\0';
-    return output_index;
+    *body_length = input_length - 2U;
+    return true;
 }
 
 static bool AppAtProtocol_ParseOnOff(const char *value, bool *enabled)
@@ -145,32 +159,40 @@ static bool AppAtProtocol_MatchAssignment(const char *prefix,
 
 bool AppAtProtocol_IsAtCommand(const char *line)
 {
-    char normalized[APP_AT_PROTOCOL_MAX_LINE_LENGTH];
+    size_t body_length = 0U;
 
-    return AppAtProtocol_Normalize(line, normalized, sizeof(normalized)) >= 3U
-        && strncmp(normalized, "AT+", 3U) == 0;
+    return AppAtProtocol_ValidateFrame(line, &body_length)
+        && (body_length >= 3U)
+        && (strncmp(line, "AT+", 3U) == 0);
 }
 
 bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
 {
-    char normalized[APP_AT_PROTOCOL_MAX_LINE_LENGTH];
+    char command_body[APP_AT_PROTOCOL_MAX_LINE_LENGTH];
     const char *value = NULL;
     bool enabled = false;
+    size_t body_length = 0U;
 
-    if ((out_command == NULL) || !AppAtProtocol_IsAtCommand(line))
+    if ((out_command == NULL) || !AppAtProtocol_ValidateFrame(line, &body_length))
+    {
+        return false;
+    }
+
+    if ((body_length < 3U) || (strncmp(line, "AT+", 3U) != 0))
     {
         return false;
     }
 
     (void)memset(out_command, 0, sizeof(*out_command));
-    (void)AppAtProtocol_Normalize(line, normalized, sizeof(normalized));
+    (void)memcpy(command_body, line, body_length);
+    command_body[body_length] = '\0';
 
-    if (AppAtProtocol_MatchQuery(normalized, out_command))
+    if (AppAtProtocol_MatchQuery(command_body, out_command))
     {
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+UART2=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+UART2=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_BRIDGE;
@@ -179,7 +201,7 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+UART3=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+UART3=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_BRIDGE;
@@ -188,8 +210,8 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if ((AppAtProtocol_MatchAssignment("AT+UART2&3=", normalized, &value)
-         || AppAtProtocol_MatchAssignment("AT+UART23=", normalized, &value))
+    if ((AppAtProtocol_MatchAssignment("AT+UART2&3=", command_body, &value)
+         || AppAtProtocol_MatchAssignment("AT+UART23=", command_body, &value))
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_BRIDGE;
@@ -198,7 +220,7 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+LED=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+LED=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_LED_MASTER;
@@ -206,14 +228,14 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+MOTOR=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+MOTOR=", command_body, &value)
         && AppAtProtocol_MatchMotorMode(value, &out_command->data.motor.mode))
     {
         out_command->type = APP_AT_COMMAND_SET_MOTOR_MODE;
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+NMOS1=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+NMOS1=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_NMOS1;
@@ -221,7 +243,7 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+NMOS2=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+NMOS2=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_NMOS2;
@@ -229,7 +251,7 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+UVLO=", normalized, &value)
+    if (AppAtProtocol_MatchAssignment("AT+UVLO=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
         out_command->type = APP_AT_COMMAND_SET_EN_UVLO;
