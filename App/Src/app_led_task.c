@@ -27,6 +27,10 @@ void App_LedTask(void *argument)
 
         (void)App_StateTryGetLedAndMotor(&led_master_enabled, &mode);
 
+        HAL_GPIO_WritePin(LED1_GPIO_Port,
+                  LED1_Pin,
+                  led_master_enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
         HAL_GPIO_WritePin(LED2_GPIO_Port,
                           LED2_Pin,
                           (led_master_enabled && (mode == APP_MOTOR_MODE_FORWARD)) ? GPIO_PIN_SET : GPIO_PIN_RESET);
