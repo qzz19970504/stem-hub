@@ -9,6 +9,7 @@
 void App_MotorTask(void *argument);
 bool App_MotorEnqueueMode(AppMotorMode mode);
 bool App_MotorTryGetStatus(AppMotorStatus *status);
+bool App_MotorGetStartupOverrideMode(AppMotorMode *mode);
 const char *App_MotorModeToString(AppMotorMode mode);
 
 #endif

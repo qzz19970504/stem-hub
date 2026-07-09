@@ -135,8 +135,14 @@ void App_MotorTask(void *argument)
     AppMotorRequest request;
     AppMotorStatus snapshot;
     uint32_t current_ma = 0U;
+    AppMotorMode startup_mode = APP_MOTOR_MODE_SLEEP;
 
     (void)argument;
+
+    if (App_MotorGetStartupOverrideMode(&startup_mode))
+    {
+        App_MotorApplyMode(startup_mode);
+    }
 
     for (;;)
     {

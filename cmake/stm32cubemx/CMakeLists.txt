@@ -34,6 +34,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_sensor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_startup.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_led_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_output_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f1xx_it.c
