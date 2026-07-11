@@ -114,6 +114,11 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("LED_QUEUE");
         break;
     case APP_AT_COMMAND_SET_MOTOR_MODE:
+        if (!App_MotorAllowsExternalControl())
+        {
+            App_RuntimeSendError("MOTOR_TEST_MODE");
+            break;
+        }
         queued = App_MotorEnqueueMode(command->data.motor.mode);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("MOTOR_QUEUE");
         break;

@@ -97,6 +97,31 @@ static bool App_MotorReadCurrent(uint32_t *current_ma)
     return true;
 }
 
+static void App_MotorRunAutoSequence(uint32_t *step_index, uint32_t *next_transition_tick)
+{
+    AppMotorMode mode = APP_MOTOR_MODE_SLEEP;
+    uint32_t current_tick;
+
+    if ((step_index == NULL) || (next_transition_tick == NULL))
+    {
+        return;
+    }
+
+    current_tick = osKernelGetTickCount();
+    if ((int32_t)(current_tick - *next_transition_tick) < 0)
+    {
+        return;
+    }
+
+    *step_index = (*step_index + 1U) % 5U;
+    if (App_MotorGetAutoSequenceModeForStep(*step_index, &mode))
+    {
+        App_MotorApplyMode(mode);
+    }
+
+    *next_transition_tick = current_tick + App_MotorGetAutoSequenceStepDurationMs();
+}
+
 const char *App_MotorModeToString(AppMotorMode mode)
 {
     switch (mode)
@@ -122,6 +147,11 @@ bool App_MotorEnqueueMode(AppMotorMode mode)
 {
     AppMotorRequest request = {.mode = mode};
 
+    if (!App_MotorAllowsExternalControl())
+    {
+        return false;
+    }
+
     return osMessageQueuePut(g_app_runtime.motor_queue, &request, 0U, 0U) == osOK;
 }
 
@@ -136,17 +166,39 @@ void App_MotorTask(void *argument)
     AppMotorStatus snapshot;
     uint32_t current_ma = 0U;
     AppMotorMode startup_mode = APP_MOTOR_MODE_SLEEP;
+    uint32_t auto_sequence_step_index = 0U;
+    uint32_t auto_sequence_next_transition_tick = 0U;
+    bool auto_sequence_enabled = false;
 
     (void)argument;
 
-    if (App_MotorGetStartupOverrideMode(&startup_mode))
+    auto_sequence_enabled = App_MotorIsAutoSequenceEnabled();
+
+    if (auto_sequence_enabled)
+    {
+        if (App_MotorGetAutoSequenceModeForStep(auto_sequence_step_index, &startup_mode))
+        {
+            App_MotorApplyMode(startup_mode);
+            auto_sequence_next_transition_tick = osKernelGetTickCount() + App_MotorGetAutoSequenceStepDurationMs();
+        }
+    }
+    else if (App_MotorGetStartupOverrideMode(&startup_mode))
     {
         App_MotorApplyMode(startup_mode);
     }
 
     for (;;)
     {
-        if (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, APP_MOTOR_MONITOR_PERIOD_MS) == osOK)
+        if (auto_sequence_enabled)
+        {
+            while (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, 0U) == osOK)
+            {
+            }
+
+            App_MotorRunAutoSequence(&auto_sequence_step_index, &auto_sequence_next_transition_tick);
+            osDelay(APP_MOTOR_MONITOR_PERIOD_MS);
+        }
+        else if (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, APP_MOTOR_MONITOR_PERIOD_MS) == osOK)
         {
             App_MotorApplyMode(request.mode);
         }
