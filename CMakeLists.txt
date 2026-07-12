@@ -66,3 +66,14 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+
+# Also produce a plain binary (.bin) for easy flashing via STM32CubeProgrammer CLI / OpenOCD
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.bin
+    COMMENT "Building ${CMAKE_PROJECT_NAME}.bin"
+)
+# And Intel HEX for tools that prefer it
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.hex
+    COMMENT "Building ${CMAKE_PROJECT_NAME}.hex"
+)
