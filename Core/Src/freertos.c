@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_core.h"
+#include "usart.h"   /* UART 通断测试用：huart2 / huart3 */
 
 /* USER CODE END Includes */
 
@@ -126,8 +127,10 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
+  /* --- UART 通断测试：暂停应用初始化 ---
   App_CoreCreateObjects();
   App_CoreInit();
+  --- */
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -144,7 +147,7 @@ void MX_FREERTOS_Init(void) {
   App_FailFastIfThreadCreateFailed(defaultTaskHandle);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* --- UART 通断测试：只跑 defaultTask，其余应用任务全部停用（防止电机等动作） ---
   atTaskHandle = osThreadNew(App_AtTask, NULL, &atTask_attributes);
   App_FailFastIfThreadCreateFailed(atTaskHandle);
   sensorTaskHandle = osThreadNew(App_SensorTask, NULL, &sensorTask_attributes);
@@ -155,6 +158,7 @@ void MX_FREERTOS_Init(void) {
   App_FailFastIfThreadCreateFailed(ledTaskHandle);
   nmosTaskHandle = osThreadNew(App_NmosTask, NULL, &nmosTask_attributes);
   App_FailFastIfThreadCreateFailed(nmosTaskHandle);
+  --- */
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -173,10 +177,14 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  /* --- 硬编码 UART 通断测试：每 500ms 往 USART2(PA2) 和 USART3(PB10) 各发一次 "hello" --- */
+  const uint8_t hello[] = "hello\r\n";
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    HAL_UART_Transmit(&huart2, (uint8_t *)hello, sizeof(hello) - 1, 100);
+    HAL_UART_Transmit(&huart3, (uint8_t *)hello, sizeof(hello) - 1, 100);
+    osDelay(500);
   }
   /* USER CODE END StartDefaultTask */
 }
