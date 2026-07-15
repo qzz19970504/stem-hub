@@ -187,6 +187,7 @@ ERROR:UNSUPPORTED
 | 采样 | AT+SENSE?\r\n | 查询最近一次传感采样结果 |
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
+| 诊断 | AT+DIAG?\r\n | 查询 UART1 RX 路径关键计数器 |
 
 ### 4.3 兼容写法
 
@@ -475,6 +476,47 @@ OK
 
 - CURRENT_MA 当前是基于 ADC 电压的占位换算值，不代表最终精确毫安值。
 - 当电流读数超过当前阈值时，固件会转入制动并置位 OVERCURRENT。
+
+### 5.8 诊断查询命令
+
+#### 5.8.1 请求格式
+
+```text
+AT+DIAG?
+```
+
+#### 5.8.2 响应格式
+
+```text
++DIAG:RX_ISR=<n>,RX_BYTE=<n>,RX_OVERFLOW=<n>,RX_ERR=<n>,ORE=<n>,NE=<n>,FE=<n>,PE=<n>,LINE_TOO_LONG=<n>,AT_LOOP=<n>,TX_CALL=<n>,TX_OK=<n>,TX_TIMEOUT=<n>,TX_ERR=<n>,UART_WDG=<n>
+OK
+```
+
+字段说明：
+
+| 字段 | 含义 |
+| --- | --- |
+| RX_ISR | UART1 IRQ 总触发次数（在中断入口直接自增） |
+| RX_BYTE | RX ISR 进入 push 路径的总次数 |
+| RX_OVERFLOW | 环形缓冲满时丢字节次数 |
+| RX_ERR | HAL_UART_ErrorCallback 总次数 |
+| ORE | 硬件 overrun 错误次数 |
+| NE | 噪声错误次数 |
+| FE | 帧错误次数 |
+| PE | 奇偶校验错误次数（本固件未启用校验，正常为 0） |
+| LINE_TOO_LONG | atTask 行缓冲溢出次数 |
+| AT_LOOP | atTask 主循环 acquire 成功次数（任务还活着的证据） |
+| TX_CALL | App_RuntimeSendText 调用次数 |
+| TX_OK | HAL_UART_Transmit 返回 HAL_OK 次数 |
+| TX_TIMEOUT | HAL_UART_Transmit 返回 HAL_TIMEOUT 次数 |
+| TX_ERR | HAL_UART_Transmit 返回 HAL_ERROR 次数 |
+| UART_WDG | UART 看门狗触发复位的次数（>0 即说明出现过 UART 假死并被自愈） |
+
+用途：
+
+- 用于排查 “命令发出但收不到回包” 类问题。
+- 计数器从 0 开始累计，不掉电不清零。
+- 固件侧不阻塞、不重置这些计数器，仅在 `AT+DIAG?` 时拷快照输出。
 
 ## 6. 透传规则
 
