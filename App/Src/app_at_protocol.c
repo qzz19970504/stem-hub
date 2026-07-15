@@ -87,6 +87,12 @@ static bool AppAtProtocol_MatchQuery(const char *line, AppAtCommand *out_command
         return true;
     }
 
+    if (strcmp(line, "AT+DIAG?") == 0)
+    {
+        out_command->type = APP_AT_COMMAND_QUERY_DIAG;
+        return true;
+    }
+
     return false;
 }
 

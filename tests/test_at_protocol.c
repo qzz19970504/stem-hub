@@ -51,6 +51,7 @@ int main(void)
     expect_query_command("AT+SENSE?\r\n", APP_AT_COMMAND_QUERY_SENSE);
     expect_query_command("AT+FAULT?\r\n", APP_AT_COMMAND_QUERY_FAULT);
     expect_query_command("AT+MOTOR?\r\n", APP_AT_COMMAND_QUERY_MOTOR);
+    expect_query_command("AT+DIAG?\r\n", APP_AT_COMMAND_QUERY_DIAG);
 
     assert(AppAtProtocol_IsAtCommand("AT+LED=ON\r\n"));
     assert(!AppAtProtocol_IsAtCommand("payload-data"));
