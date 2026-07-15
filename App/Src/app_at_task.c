@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "app_at_protocol.h"
 #include "app_config.h"
@@ -164,6 +165,7 @@ static void App_AtReplyDiag(void)
                    (unsigned long)diag.tx_completed_count,
                    (unsigned long)diag.tx_timeout_count,
                    (unsigned long)diag.tx_error_count,
+                   (unsigned long)diag.uart_watchdog_reset_count,
                    (unsigned long)diag.uart_watchdog_reset_count);
     App_RuntimeSendText(&huart1, buffer);
 }
@@ -257,14 +259,41 @@ void App_AtTask(void *argument)
 
     for (;;)
     {
-        if (osSemaphoreAcquire(g_app_runtime.uart1_rx_semaphore, osWaitForever) != osOK)
+        /* 用 100ms 超时 acquire 代替 osWaitForever——这样即使 RX ISR 停了，
+         * atTask 也能每 100ms 醒来一次，检查 UART 看门狗（tick 差值比较）。
+         * acquire 成功 → 有数据；超时 → 只做 watchdog 检查，循环继续。 */
+        osStatus_t status = osSemaphoreAcquire(g_app_runtime.uart1_rx_semaphore, 100U);
+
+        /* 信号量 acquire 成功 = atTask 被唤醒（>0 表示有数据要处理）。
+         * 超时 (osErrorTimeout) 时不做信号量相关的处理，但 watchdog 检查
+         * 总是执行。 */
+        if (status == osOK)
+        {
+            App_RuntimeNoteAtLoop();
+
+            /* UART 看门狗复位后会 release 信号量唤醒这里。
+             * 如果有 reset_pending：丢半包状态、清空 line_buffer，避免下一条
+             * 重发命令被旧的半包污染。ring buffer 在复位时已经清空。 */
+            if (g_app_runtime.uart_reset_pending)
+            {
+                g_app_runtime.uart_reset_pending = false;
+                (void)memset(line_buffer, 0, sizeof(line_buffer));
+                line_length = 0U;
+                saw_carriage_return = false;
+                while (App_RuntimePopUart1Byte(&byte)) { /* drop */ }
+            }
+        }
+
+        /* 始终检查 UART 看门狗：不管是 signal 唤醒还是 timeout 唤醒，
+         * 都要检查一次 RX 静默时长。atTask 是 AboveNormal 优先级，
+         * 每 100ms 被 semaphore timeout 准时唤醒，不受其他任务状态影响。*/
+        App_RuntimeUartWatchdogTick(NULL);
+
+        /* 如果是 timeout 唤醒（无数据），直接继续阻塞等待。 */
+        if (status != osOK)
         {
             continue;
         }
-
-        /* 信号量 acquire 成功 = atTask 至少被唤醒一次，配合 rx_isr_count 区分
-         * "RX ISR 没触发" vs "RX ISR 触发了但 atTask 被卡住没来 acquire"。 */
-        App_RuntimeNoteAtLoop();
 
         while (App_RuntimePopUart1Byte(&byte))
         {
