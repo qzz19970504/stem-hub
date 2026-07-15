@@ -395,7 +395,7 @@ AT+SENSE?
 #### 5.5.2 响应格式
 
 ```text
-+SENSE:BATT_NTC=<value>,BATT_MV=<value>,NTC1=<value>,NTC2=<value>,NTC3=<value>,TICK=<value>,COUNT=<value>
++SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1=<value>,NTC2=<value>,NTC3=<value>,TICK=<value>,COUNT=<value>
 OK
 ```
 
@@ -404,7 +404,7 @@ OK
 | 字段 | 含义 |
 | --- | --- |
 | BATT_NTC | 电池 NTC 当前值 |
-| BATT_MV | 电池电压当前值 |
+| BATT_V | 电池电压当前值，单位为伏特（V），保留 1 位小数（如 3.3V、37.0V） |
 | NTC1 | NTC1 当前值 |
 | NTC2 | NTC2 当前值 |
 | NTC3 | NTC3 当前值 |
@@ -413,7 +413,8 @@ OK
 
 注意：
 
-- 当前这些值还是占位换算值，本质上接近毫伏量纲，不应直接当成最终物理量。
+- BATT_V 内部以毫伏整数计算后再除以 1000 输出，已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。
+- BATT_NTC / NTC1-3 当前仍是占位换算值，本质上接近毫伏量纲，不应直接当成最终物理量。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
 
 ### 5.6 故障查询命令
