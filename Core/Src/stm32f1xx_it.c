@@ -61,6 +61,10 @@ extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN EV */
+extern volatile uint32_t g_app_diag_usart1_isr_count;
+/* USER CODE END EV */
+
+/* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
 
@@ -182,7 +186,10 @@ void TIM1_UP_IRQHandler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-
+  /* 在 HAL 之前自增——这样即使 HAL 内部卡住、error callback 没回调，
+   * 我们仍能看到 IRQ 实际进入了多少次。用来区分 "UART 根本没产生中断"
+   * vs "中断产生了但 HAL 没处理好"。 */
+  g_app_diag_usart1_isr_count++;
   /* USER CODE END USART1_IRQn 0 */
   HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */

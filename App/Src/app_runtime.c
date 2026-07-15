@@ -12,6 +12,13 @@ AppRuntime g_app_runtime = {0};
  * 读侧通过 App_RuntimeGetDiag 拷一份快照出来。 */
 static volatile AppRuntimeDiag g_app_diag = {0};
 
+/* USART1 IRQ 入口自增（stm32f1xx_it.c），与 HAL 层完全解耦。*/
+volatile uint32_t g_app_diag_usart1_isr_count = 0;
+
+/* UART 看门狗：记录最近一次 RX ISR 的系统 tick (ms)。
+ * 在 ISR 里写 (只写 32 位对齐的 volatile 变量)，任务里读。 */
+static volatile uint32_t g_app_runtime_last_rx_ms = 0;
+
 static void App_RuntimeFailFastIfNull(const void *handle)
 {
     if (handle == NULL)
@@ -74,7 +81,20 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
 
     if (length > 0U)
     {
-        (void)HAL_UART_Transmit(uart, (uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
+        g_app_diag.tx_call_count++;
+        HAL_StatusTypeDef status = HAL_UART_Transmit(uart, (uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
+        if (status == HAL_OK)
+        {
+            g_app_diag.tx_completed_count++;
+        }
+        else if (status == HAL_TIMEOUT)
+        {
+            g_app_diag.tx_timeout_count++;
+        }
+        else
+        {
+            g_app_diag.tx_error_count++;
+        }
     }
 }
 
@@ -111,6 +131,10 @@ bool App_RuntimePushUart1Byte(uint8_t byte)
 
     g_app_runtime.uart1_ring[g_app_runtime.uart1_head] = byte;
     g_app_runtime.uart1_head = next_head;
+
+    /* 喂 UART 看门狗——任何字节成功入队都视为 RX 通路健康。 */
+    g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
+
     return true;
 }
 
@@ -185,6 +209,7 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
      * 时仍可能撕裂——所以这里关一次中断。*/
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
+    out->rx_isr_count = g_app_diag_usart1_isr_count;
     out->rx_byte_count = g_app_diag.rx_byte_count;
     out->rx_overflow_count = g_app_diag.rx_overflow_count;
     out->rx_error_count = g_app_diag.rx_error_count;
@@ -193,12 +218,63 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
     out->rx_fe_count = g_app_diag.rx_fe_count;
     out->rx_pe_count = g_app_diag.rx_pe_count;
     out->line_too_long_count = g_app_diag.line_too_long_count;
+    out->at_loop_count = g_app_diag.at_loop_count;
+    out->tx_call_count = g_app_diag.tx_call_count;
+    out->tx_completed_count = g_app_diag.tx_completed_count;
+    out->tx_timeout_count = g_app_diag.tx_timeout_count;
+    out->tx_error_count = g_app_diag.tx_error_count;
+    out->uart_watchdog_reset_count = g_app_diag.uart_watchdog_reset_count;
     __set_PRIMASK(primask);
 }
 
 void App_RuntimeNoteLineTooLong(void)
 {
     g_app_diag.line_too_long_count++;
+}
+
+void App_RuntimeNoteAtLoop(void)
+{
+    g_app_diag.at_loop_count++;
+}
+
+/* UART 看门狗触发复位：UART_DeInit + MX_USART1_UART_Init 重新初始化外设，
+ * 然后重新启动 RX_IT。这能把 UART1 从"假死"状态里拉回来。
+ * 计数到 uart_watchdog_reset_count 方便诊断。 */
+static void App_RuntimeResetUart1(void)
+{
+    g_app_diag.uart_watchdog_reset_count++;
+
+    HAL_UART_DeInit(&huart1);
+    MX_USART1_UART_Init();
+
+    /* MX_USART1_UART_Init 已经把 RX_IT 状态机复位了，但需要在调它之前
+     * 先清掉 ErrorCode，否则 HAL_UART_Receive_IT 会失败。 */
+    huart1.ErrorCode = HAL_UART_ERROR_NONE;
+
+    App_RuntimeStartUart1Receive();
+}
+
+/* 喂狗——任何成功的 RX ISR 都会通过 App_RuntimePushUart1Byte 间接更新
+ * g_app_runtime_last_rx_ms，所以这里只是把接口暴露出来便于测试。 */
+void App_RuntimeUartWatchdogKick(void)
+{
+    g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
+}
+
+/* 检查 UART1 是否静默超时，是的话复位。返回 true 表示已经复位过一次。 */
+bool App_RuntimeUartWatchdogCheck(uint32_t now_ms)
+{
+    uint32_t last = g_app_runtime_last_rx_ms;
+    uint32_t elapsed = (now_ms >= last) ? (now_ms - last) : 0U;
+
+    if (elapsed >= APP_UART_WATCHDOG_TIMEOUT_MS)
+    {
+        App_RuntimeResetUart1();
+        /* 复位后喂一次狗，避免立即再次复位 */
+        g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
+        return true;
+    }
+    return false;
 }
 
 void App_CoreCreateObjects(void)

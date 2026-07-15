@@ -142,14 +142,15 @@ static void App_AtReplyMotor(void)
  * 字段含义见 AppRuntimeDiag（app_runtime.h）。非关键路径，不影响其它 AT 命令。 */
 static void App_AtReplyDiag(void)
 {
-    char buffer[192];
+    char buffer[320];
     AppRuntimeDiag diag;
 
     App_RuntimeGetDiag(&diag);
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+DIAG:RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu\r\nOK\r\n",
+                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,UART_WDG=%lu\r\nOK\r\n",
+                   (unsigned long)diag.rx_isr_count,
                    (unsigned long)diag.rx_byte_count,
                    (unsigned long)diag.rx_overflow_count,
                    (unsigned long)diag.rx_error_count,
@@ -157,7 +158,13 @@ static void App_AtReplyDiag(void)
                    (unsigned long)diag.rx_ne_count,
                    (unsigned long)diag.rx_fe_count,
                    (unsigned long)diag.rx_pe_count,
-                   (unsigned long)diag.line_too_long_count);
+                   (unsigned long)diag.line_too_long_count,
+                   (unsigned long)diag.at_loop_count,
+                   (unsigned long)diag.tx_call_count,
+                   (unsigned long)diag.tx_completed_count,
+                   (unsigned long)diag.tx_timeout_count,
+                   (unsigned long)diag.tx_error_count,
+                   (unsigned long)diag.uart_watchdog_reset_count);
     App_RuntimeSendText(&huart1, buffer);
 }
 
@@ -254,6 +261,10 @@ void App_AtTask(void *argument)
         {
             continue;
         }
+
+        /* 信号量 acquire 成功 = atTask 至少被唤醒一次，配合 rx_isr_count 区分
+         * "RX ISR 没触发" vs "RX ISR 触发了但 atTask 被卡住没来 acquire"。 */
+        App_RuntimeNoteAtLoop();
 
         while (App_RuntimePopUart1Byte(&byte))
         {
