@@ -1,5 +1,6 @@
 #include "app_sensor.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "app_config.h"
@@ -13,7 +14,19 @@ static int32_t App_SensorConvertBatteryNtc(uint32_t millivolts)
 
 static int32_t App_SensorConvertBatteryVoltage(uint32_t millivolts)
 {
-    return (int32_t)millivolts;
+    /* millivolts 是 ADC 引脚上的电压（即 R_BOTTOM 上的压降），
+     * 通过分压比换算出电池实际电压，单位仍为 mV。
+     * VBAT = Vadc * (R_TOP + R_BOTTOM) / R_BOTTOM */
+    uint32_t ratio_num = APP_BATT_VOLTAGE_DIVIDER_R_TOP_OHMS + APP_BATT_VOLTAGE_DIVIDER_R_BOTTOM_OHMS;
+    uint32_t ratio_den = APP_BATT_VOLTAGE_DIVIDER_R_BOTTOM_OHMS;
+    uint64_t battery_mv = ((uint64_t)millivolts * ratio_num) / ratio_den;
+
+    if (battery_mv > (uint32_t)INT32_MAX)
+    {
+        return INT32_MAX;
+    }
+
+    return (int32_t)battery_mv;
 }
 
 static int32_t App_SensorConvertNtcTemperature(uint32_t millivolts)

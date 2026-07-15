@@ -38,6 +38,9 @@ static void App_AtReplySense(void)
 {
     char buffer[256];
     AppSensorSnapshot snapshot;
+    long batt_mv = 0L;
+    unsigned long batt_v_int = 0UL;
+    unsigned long batt_v_dec = 0UL;
 
     if (!App_SensorTryGetSnapshot(&snapshot))
     {
@@ -45,11 +48,22 @@ static void App_AtReplySense(void)
         return;
     }
 
+    /* physical_value 存的是电池 mV；按 "整数位.小数位V" 输出，避免 newlib-nano
+     * 默认不链接 %f 的问题。decimals 四舍五入到 0.1V。 */
+    batt_mv = snapshot.battery_voltage.physical_value;
+    if (batt_mv < 0L)
+    {
+        batt_mv = 0L;
+    }
+    batt_v_int = (unsigned long)batt_mv / 1000UL;
+    batt_v_dec = ((unsigned long)batt_mv % 1000UL + 50UL) / 100UL;
+
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+SENSE:BATT_NTC=%ld,BATT_MV=%lu,NTC1=%ld,NTC2=%ld,NTC3=%ld,TICK=%lu,COUNT=%lu\r\nOK\r\n",
+                   "+SENSE:BATT_NTC=%ld,BATT_V=%lu.%luV,NTC1=%ld,NTC2=%ld,NTC3=%ld,TICK=%lu,COUNT=%lu\r\nOK\r\n",
                    (long)snapshot.battery_ntc.physical_value,
-                   (unsigned long)snapshot.battery_voltage.physical_value,
+                   batt_v_int,
+                   batt_v_dec,
                    (long)snapshot.ntc1.physical_value,
                    (long)snapshot.ntc2.physical_value,
                    (long)snapshot.ntc3.physical_value,

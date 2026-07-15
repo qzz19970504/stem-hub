@@ -198,7 +198,7 @@ at+led=on\r\n
 
 | 指令 | 说明 | 回包示例 |
 | --- | --- | --- |
-| AT+SENSE? | 读取最近一次传感采样结果 | +SENSE:BATT_NTC=1234,BATT_MV=2500,NTC1=1200,NTC2=1180,NTC3=1210,TICK=4567,COUNT=8 |
+| AT+SENSE? | 读取最近一次传感采样结果 | +SENSE:BATT_NTC=1234,BATT_V=37.0V,NTC1=1200,NTC2=1180,NTC3=1210,TICK=4567,COUNT=8 |
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 
