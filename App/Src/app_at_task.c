@@ -1,5 +1,7 @@
 #include "app_at.h"
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "app_at_protocol.h"
@@ -34,6 +36,24 @@ static void App_AtForwardLine(const char *line)
     }
 }
 
+/* 把 0.1°C 分辨率的有符号整数格式化为 "X.XC" 或 "-X.XC"（避免 newlib-nano %f）。
+ * 异常值 (INT32_MAX) 输出为 "ERR"。*/
+static int App_AtFormatTempCenti(char *out, size_t out_size, int32_t centi_c)
+{
+    if (centi_c == INT32_MAX)
+    {
+        return snprintf(out, out_size, "ERR");
+    }
+    if (centi_c < 0)
+    {
+        unsigned long abs_c = (unsigned long)(-centi_c);
+        return snprintf(out, out_size, "-%lu.%luC", abs_c / 10UL, abs_c % 10UL);
+    }
+    return snprintf(out, out_size, "%lu.%luC",
+                    (unsigned long)centi_c / 10UL,
+                    (unsigned long)centi_c % 10UL);
+}
+
 static void App_AtReplySense(void)
 {
     char buffer[256];
@@ -41,6 +61,9 @@ static void App_AtReplySense(void)
     long batt_mv = 0L;
     unsigned long batt_v_int = 0UL;
     unsigned long batt_v_dec = 0UL;
+    char ntc1_str[8];
+    char ntc2_str[8];
+    char ntc3_str[8];
 
     if (!App_SensorTryGetSnapshot(&snapshot))
     {
@@ -58,15 +81,20 @@ static void App_AtReplySense(void)
     batt_v_int = (unsigned long)batt_mv / 1000UL;
     batt_v_dec = ((unsigned long)batt_mv % 1000UL + 50UL) / 100UL;
 
+    /* NTC1/2/3 physical_value 是 0.1°C 的有符号整数，由 App_SensorConvertNtcTemperature 算出。*/
+    (void)App_AtFormatTempCenti(ntc1_str, sizeof(ntc1_str), snapshot.ntc1.physical_value);
+    (void)App_AtFormatTempCenti(ntc2_str, sizeof(ntc2_str), snapshot.ntc2.physical_value);
+    (void)App_AtFormatTempCenti(ntc3_str, sizeof(ntc3_str), snapshot.ntc3.physical_value);
+
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+SENSE:BATT_NTC=%ld,BATT_V=%lu.%luV,NTC1=%ld,NTC2=%ld,NTC3=%ld,TICK=%lu,COUNT=%lu\r\nOK\r\n",
+                   "+SENSE:BATT_NTC=%ld,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu\r\nOK\r\n",
                    (long)snapshot.battery_ntc.physical_value,
                    batt_v_int,
                    batt_v_dec,
-                   (long)snapshot.ntc1.physical_value,
-                   (long)snapshot.ntc2.physical_value,
-                   (long)snapshot.ntc3.physical_value,
+                   ntc1_str,
+                   ntc2_str,
+                   ntc3_str,
                    (unsigned long)snapshot.sample_tick,
                    (unsigned long)snapshot.sample_counter);
     App_RuntimeSendText(&huart1, buffer);

@@ -23,4 +23,16 @@
 #define APP_BATT_VOLTAGE_DIVIDER_R_TOP_OHMS 100000U
 #define APP_BATT_VOLTAGE_DIVIDER_R_BOTTOM_OHMS 5000U
 
+/* NTC temperature sensing (NTC1/NTC2/NTC3 on ADC2 IN9/IN7/IN6).
+ * 拓扑: 3V3 -- NTC -- Vadc -- [R_SERIES] -- GND
+ * Vadc = V_SUPPLY * R_SERIES / (R_NTC + R_SERIES)
+ * R_NTC = R_SERIES * (V_SUPPLY - Vadc) / Vadc
+ * 当前 NTC 型号: HNTC0603-103F3450FA (R25=10kΩ, B25/85=3450K, ±1%)
+ * 工作范围: -40°C ~ +125°C
+ * 实际换算在 app_sensor_task.c 中用查表法 (R-T 表见 app_ntc_table.c)，
+ * 不使用 B 方程——B 方程在该 datasheet 区间外偏差过大 (±100°C 级)。*/
+#define APP_NTC_V_SUPPLY_MV    3300U
+#define APP_NTC_R_SERIES_OHMS   470U
+#define APP_NTC_R25_OHMS      10000U /* datasheet 标称值，仅作记录 */
+
 #endif

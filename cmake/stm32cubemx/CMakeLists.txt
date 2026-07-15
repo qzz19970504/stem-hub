@@ -36,6 +36,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_led_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_output_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_ntc_table.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f1xx_it.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f1xx_hal_msp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f1xx_hal_timebase_tim.c
