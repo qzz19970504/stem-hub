@@ -61,6 +61,7 @@ static void App_AtReplySense(void)
     long batt_mv = 0L;
     unsigned long batt_v_int = 0UL;
     unsigned long batt_v_dec = 0UL;
+    char batt_ntc_str[8];
     char ntc1_str[8];
     char ntc2_str[8];
     char ntc3_str[8];
@@ -81,15 +82,17 @@ static void App_AtReplySense(void)
     batt_v_int = (unsigned long)batt_mv / 1000UL;
     batt_v_dec = ((unsigned long)batt_mv % 1000UL + 50UL) / 100UL;
 
-    /* NTC1/2/3 physical_value 是 0.1°C 的有符号整数，由 App_SensorConvertNtcTemperature 算出。*/
+    /* BATT_NTC/NTC1/2/3 physical_value 是 0.1°C 的有符号整数，由各自
+     * 的 App_SensorConvertBatteryNtc / App_SensorConvertNtcTemperature 算出。*/
+    (void)App_AtFormatTempCenti(batt_ntc_str, sizeof(batt_ntc_str), snapshot.battery_ntc.physical_value);
     (void)App_AtFormatTempCenti(ntc1_str, sizeof(ntc1_str), snapshot.ntc1.physical_value);
     (void)App_AtFormatTempCenti(ntc2_str, sizeof(ntc2_str), snapshot.ntc2.physical_value);
     (void)App_AtFormatTempCenti(ntc3_str, sizeof(ntc3_str), snapshot.ntc3.physical_value);
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+SENSE:BATT_NTC=%ld,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu\r\nOK\r\n",
-                   (long)snapshot.battery_ntc.physical_value,
+                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu\r\nOK\r\n",
+                   batt_ntc_str,
                    batt_v_int,
                    batt_v_dec,
                    ntc1_str,
