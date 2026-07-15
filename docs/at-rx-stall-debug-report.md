@@ -244,7 +244,52 @@ App_RuntimeStartUart1Receive();           // 重启 RX_IT
 
 ---
 
-## 8. 相关链接
+## 8. 外部审查与 followup 修复（commits `d4b3f8d` + `c54b8a0`）
+
+初始修复合并到 master 后，进行了独立代码审查，发现以下问题：
+
+### 8.1 审查发现
+
+| 严重度 | 问题 | 说明 |
+|---|---|---|
+| **HIGH** | Boot 空闲 30s 误触发 | `g_app_runtime_last_rx_ms` BSS 初始化为 0，boot 后 30s 必定 `delta ≥ 30000`，watchdog 在没有任何 UART 活动时就复位 UART1 |
+| **MEDIUM** | 恢复后 AT 行解析器半包状态污染 | 如果 stall 发生在半条命令途中，watchdog 复位后旧 `line_buffer` 残留会拼到新命令前面，导致静默丢包 |
+| **MEDIUM** | 根因推断过满 | 报告写"UART 外设假死"是过头了——证据只支持"RX 中断路径停了"，未排除 RXNEIE/NVIC/时钟等 |
+| **MEDIUM** | Tick 回绕不安全 | `elapsed = now - last` 在 49 天 wraparound 后直接算错 |
+| **LOW** | motorTask 意外退出 | `wdg_check_count` 探针发现 motorTask 只调了 56 次 watchdog（~5.6s）后就停了；FreeRTOS software timer 回调也观察到停止 |
+
+### 8.2 Followup 修复
+
+**Commit `d4b3f8d`**（`fix/at-rx-stall-followup` 分支，已合并 master `c54b8a0`）：
+
+1. **Armed flag**（解决误触发）：`g_app_runtime.watchdog_armed` sticky 位，第一次成功 RX 后置 true；armed=false 时 WatchdogTick 直接返回，不做超时判断
+
+2. **Ring buffer + 半包状态清理**（解决半包污染）：`App_RuntimeResetUart1` 里关中断原子清 head/tail + ring；新增 `uart_reset_pending` flag → atTask 醒来先 `memset(line_buffer)` + 丢排空 ring
+
+3. **Tick 回绕安全**：`delta < 0x80000000U` 判据，wraparound 后 delta 接近 4G 隐式返回 false
+
+4. **Watchdog 宿主从 motorTask → atTask**：motorTask 发现会意外退出（~5.6s），FreeRTOS software timer 回调也观察到停止。atTask 改用 `osSemaphoreAcquire(sem, 100U)` timeout 代替 `osWaitForever`，AboveNormal 优先级，即使 RX ISR 死了也能每 100ms 准时醒来做 watchdog 检查
+
+### 8.3 验证
+
+| 测试 | 结果 |
+|---|---|
+| 60s 上电 idle（无 AT 命令） | `UART_WDG=0` ✓ |
+| 35s armed silence（模拟 stall） | `UART_WDG=0 → 1`，恢复后 `AT+SENSE?` 正常 ✓ |
+| 6min repro（5s 间隔 AT+SENSE?） | 原 bug 在 ~40s 处复发（本次 6 次 SENSE OK 后沉默），watchdog 机制完整但需要 30s 恢复窗口；测试脚本超时太短没等到恢复 |
+| Host unit test | `test_at_protocol.c` ✓ |
+
+### 8.4 仍未解决的相邻问题
+
+1. **Sensor task 冻结**：TICK/COUNT 在 ~21 个周期后停止增长（复现稳定），motorTask 在 ~5.6s 后退出（wdg_check_count 停止增长）。两个问题可能共享根因（栈溢出 / 内存踩踏 / 优先级反转），但未深入调查。
+
+2. **"RX 中断路径停了"的精确根因未定位**：下次自然复现时应补抓 USART1 SR / CR1 / CR3 / RCC 时钟位 / NVIC enable+pending / `huart1.RxState` / `huart1.ErrorCode` 寄存器现场。
+
+3. **DMA+IDLE 接收**：审查建议作为长期方向，可绕开单字节 `HAL_UART_Receive_IT` 反复 re-arm 的开销和潜在状态机问题。
+
+---
+
+## 9. 相关链接
 
 - 详细 AT 命令文档：[`上位机AT命令文档.md`](../上位机AT命令文档.md) §5.8
 - 看门狗 API：[`app_runtime.h`](../App/Inc/app_runtime.h) 的 `App_RuntimeUartWatchdogKick` / `App_RuntimeUartWatchdogCheck`
