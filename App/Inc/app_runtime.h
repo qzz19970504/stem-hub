@@ -45,6 +45,7 @@ typedef struct
     uint32_t tx_timeout_count;
     uint32_t tx_error_count;
     uint32_t uart_watchdog_reset_count;  /* UART 看门狗触发复位的次数 */
+    uint32_t wdg_check_count;            /* motorTask 调 WatchdogCheck 的总次数 */
 } AppRuntimeDiag;
 
 typedef struct
@@ -61,6 +62,13 @@ typedef struct
     osMessageQueueId_t motor_queue;
     osMessageQueueId_t led_queue;
     osMessageQueueId_t output_queue;
+    /* UART 看门狗：armed 在第一次成功入队 RX 字节后变 true，
+     * 之后才允许 watchdog 触发复位。uart_reset_pending 由看门狗
+     * 在复位 UART 后置位，再由 atTask 清 line_buffer 半包状态。
+     * 看门狗由 atTask 的 semaphore timeout (100ms) 驱动，
+     * 不依赖 motorTask/timer task。 */
+    volatile bool watchdog_armed;
+    volatile bool uart_reset_pending;
 } AppRuntime;
 
 extern AppRuntime g_app_runtime;
@@ -85,10 +93,18 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out);
 void App_RuntimeNoteLineTooLong(void);
 void App_RuntimeNoteAtLoop(void);
 
-/* UART 看门狗：如果在 APP_UART_WATCHDOG_TIMEOUT_MS 时间内没有任何 RX 字节，
- * 主动复位 UART1 外设（UART_DeInit + Init + Receive_IT 重启）。
- * 在任务上下文调用（不要在 ISR 里调）。 */
+/* UART 看门狗检查——由 atTask 每 100ms 通过 semaphore timeout 驱动。
+ * 只看 volatile 读 + tick 差值 + 条件触发 UART 复位。
+ * 不阻塞、不做复杂的 RTOS 调用。
+ * 之所以放在 atTask：它改用 osSemaphoreAcquire(sem, 100U) timeout
+ * 代替 osWaitForever，即使 RX ISR 停了也能准时醒来检查。 */
+void App_RuntimeUartWatchdogTick(void *argument);
+
+/* 喂狗（公开接口，用于测试前主动 arm）。 */
 void App_RuntimeUartWatchdogKick(void);
-bool App_RuntimeUartWatchdogCheck(uint32_t now_ms);
+
+/* 暴露内部状态给 DIAG 查询。 */
+uint32_t App_RuntimeGetLastRxMs(void);
+bool App_RuntimeIsWatchdogArmed(void);
 
 #endif

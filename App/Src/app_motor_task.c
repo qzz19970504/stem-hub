@@ -1,7 +1,5 @@
 #include "app_motor.h"
 
-#include <cmsis_os.h>
-
 #include "app_config.h"
 #include "app_runtime.h"
 #include "app_state.h"
@@ -142,12 +140,6 @@ void App_MotorTask(void *argument)
 
     for (;;)
     {
-        /* UART 看门狗：每 100ms 检查一次 RX 静默时间，超过阈值就复位 UART1。
-         * 这里放在 motorTask 而非 atTask，是因为 atTask 在 UART 假死后会卡在
-         * 信号量上永远不再跑，放到 atTask 里等于没有看门狗。
-         * motorTask 每 100ms 醒来一次 (AboveNormal 优先级，独立于 UART 状态)。 */
-        (void)App_RuntimeUartWatchdogCheck((uint32_t)osKernelGetTickCount());
-
         if (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, APP_MOTOR_MONITOR_PERIOD_MS) == osOK)
         {
             App_MotorApplyMode(request.mode);
