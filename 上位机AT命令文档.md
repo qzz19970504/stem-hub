@@ -395,7 +395,7 @@ AT+SENSE?
 #### 5.5.2 响应格式
 
 ```text
-+SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1=<value>,NTC2=<value>,NTC3=<value>,TICK=<value>,COUNT=<value>
++SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1_C=<value>C,NTC2_C=<value>C,NTC3_C=<value>C,TICK=<value>,COUNT=<value>
 OK
 ```
 
@@ -403,18 +403,22 @@ OK
 
 | 字段 | 含义 |
 | --- | --- |
-| BATT_NTC | 电池 NTC 当前值 |
-| BATT_V | 电池电压当前值，单位为伏特（V），保留 1 位小数（如 3.3V、37.0V） |
-| NTC1 | NTC1 当前值 |
-| NTC2 | NTC2 当前值 |
-| NTC3 | NTC3 当前值 |
+| BATT_NTC | 电池 NTC 当前值（占位实现，原始 mV） |
+| BATT_V | 电池电压当前值，单位为伏特（V），保留 1 位小数（如 3.3V、37.0V）。已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。 |
+| NTC1_C | NTC1 温度（℃），保留 1 位小数（如 25.3C、-5.2C），查表法实现 |
+| NTC2_C | NTC2 温度（℃），格式同 NTC1_C |
+| NTC3_C | NTC3 温度（℃），格式同 NTC1_C |
 | TICK | 本次样本写入时的系统 Tick |
 | COUNT | 样本计数 |
 
+NTC 拓扑为 3V3 -- NTC -- ADC测点 -- 470Ω -- GND，NTC 型号 HNTC0603-103F3450FA。  
+工作范围 -40°C ~ +125°C，钳位到表外温度时分别返回 -40.0C / 125.0C。  
+ADC 读数为 0（开路）时钳位到 -40.0C；ADC 读数 ≥ 3300mV（短路）时返回 ERR。
+
 注意：
 
-- BATT_V 内部以毫伏整数计算后再除以 1000 输出，已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。
-- BATT_NTC / NTC1-3 当前仍是占位换算值，本质上接近毫伏量纲，不应直接当成最终物理量。
+- BATT_NTC 仍是占位换算值，本质上接近毫伏量纲，不应直接当成最终物理量。
+- NTC1_C / NTC2_C / NTC3_C 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
 
 ### 5.6 故障查询命令

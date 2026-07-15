@@ -64,7 +64,8 @@
 
 下面这些能力当前还没有做完整，README 会按照实际代码状态说明，不把未来规划写成已完成：
 
-- 温度和物理量换算目前仍是占位实现，现阶段返回值本质上仍是毫伏值。
+- BATT_NTC（电池 NTC，ADC1 IN4）当前是占位实现，原样返回 mV。
+- NTC1/NTC2/NTC3（ADC2 IN9/IN7/IN6）已用查表法实现温度换算（HNTC0603-103F3450FA，-40~+125°C，1°C 步长，线性插值）；具体精度受 12-bit ADC 量化限制（0~85°C 区间约 ±0.5°C，低温段因 Vadc 接近 0 误差更大）。
 - nFAULT 和 nFLT 目前只支持 GPIO 读取和查询，没有完整故障恢复流程。
 - 没有提供下载、烧录、量产参数配置脚本。
 - 没有引入 DMA 串口接收或 ADC DMA 扫描，当前实现以简单、稳定、容易维护为优先。
@@ -198,7 +199,7 @@ at+led=on\r\n
 
 | 指令 | 说明 | 回包示例 |
 | --- | --- | --- |
-| AT+SENSE? | 读取最近一次传感采样结果 | +SENSE:BATT_NTC=1234,BATT_V=37.0V,NTC1=1200,NTC2=1180,NTC3=1210,TICK=4567,COUNT=8 |
+| AT+SENSE? | 读取最近一次传感采样结果 | +SENSE:BATT_NTC=1234,BATT_V=37.0V,NTC1_C=25.3C,NTC2_C=25.2C,NTC3_C=25.4C,TICK=4567,COUNT=8 |
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 
