@@ -202,11 +202,16 @@ void App_SensorTask(void *argument)
 
     for (;;)
     {
+        App_RuntimeNoteSensorLoop();
         (void)memset(&next_snapshot, 0, sizeof(next_snapshot));
         success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw);
         if (success)
         {
             App_SensorUpdateMeasure(&next_snapshot.battery_ntc, raw, App_SensorConvertBatteryNtc);
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc1ReadFail();
         }
 
         if (success)
@@ -215,6 +220,10 @@ void App_SensorTask(void *argument)
             if (success)
             {
                 App_SensorUpdateMeasure(&next_snapshot.battery_voltage, raw, App_SensorConvertBatteryVoltage);
+            }
+            else
+            {
+                App_RuntimeNoteSensorAdc1ReadFail();
             }
         }
 
@@ -225,6 +234,10 @@ void App_SensorTask(void *argument)
             {
                 App_SensorUpdateMeasure(&next_snapshot.ntc3, raw, App_SensorConvertNtcTemperature);
             }
+            else
+            {
+                App_RuntimeNoteSensorAdc2ReadFail();
+            }
         }
 
         if (success)
@@ -233,6 +246,10 @@ void App_SensorTask(void *argument)
             if (success)
             {
                 App_SensorUpdateMeasure(&next_snapshot.ntc2, raw, App_SensorConvertNtcTemperature);
+            }
+            else
+            {
+                App_RuntimeNoteSensorAdc2ReadFail();
             }
         }
 
@@ -243,11 +260,17 @@ void App_SensorTask(void *argument)
             {
                 App_SensorUpdateMeasure(&next_snapshot.ntc1, raw, App_SensorConvertNtcTemperature);
             }
+            else
+            {
+                App_RuntimeNoteSensorAdc2ReadFail();
+            }
         }
 
         if (success)
         {
-            App_StatePublishSensorSnapshot(&next_snapshot, osKernelGetTickCount());
+            uint32_t tick = (uint32_t)osKernelGetTickCount();
+            App_StatePublishSensorSnapshot(&next_snapshot, tick);
+            App_RuntimeNoteSensorPublish(tick);
         }
 
         osDelay(APP_SENSOR_PERIOD_MS);

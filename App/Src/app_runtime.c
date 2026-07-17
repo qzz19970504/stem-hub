@@ -216,6 +216,11 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
     out->tx_completed_count = g_app_diag.tx_completed_count;
     out->tx_timeout_count = g_app_diag.tx_timeout_count;
     out->tx_error_count = g_app_diag.tx_error_count;
+    out->sensor_loop_count = g_app_diag.sensor_loop_count;
+    out->sensor_publish_count = g_app_diag.sensor_publish_count;
+    out->sensor_last_publish_tick = g_app_diag.sensor_last_publish_tick;
+    out->sensor_adc1_read_fail_count = g_app_diag.sensor_adc1_read_fail_count;
+    out->sensor_adc2_read_fail_count = g_app_diag.sensor_adc2_read_fail_count;
     __set_PRIMASK(primask);
 }
 
@@ -227,6 +232,27 @@ void App_RuntimeNoteLineTooLong(void)
 void App_RuntimeNoteAtLoop(void)
 {
     g_app_diag.at_loop_count++;
+}
+
+void App_RuntimeNoteSensorLoop(void)
+{
+    g_app_diag.sensor_loop_count++;
+}
+
+void App_RuntimeNoteSensorPublish(uint32_t tick)
+{
+    g_app_diag.sensor_publish_count++;
+    g_app_diag.sensor_last_publish_tick = tick;
+}
+
+void App_RuntimeNoteSensorAdc1ReadFail(void)
+{
+    g_app_diag.sensor_adc1_read_fail_count++;
+}
+
+void App_RuntimeNoteSensorAdc2ReadFail(void)
+{
+    g_app_diag.sensor_adc2_read_fail_count++;
 }
 
 void App_CoreCreateObjects(void)
