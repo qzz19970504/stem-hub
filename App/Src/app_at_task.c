@@ -142,14 +142,14 @@ static void App_AtReplyMotor(void)
  * 字段含义见 AppRuntimeDiag（app_runtime.h）。非关键路径，不影响其它 AT 命令。 */
 static void App_AtReplyDiag(void)
 {
-    char buffer[320];
+    char buffer[512];
     AppRuntimeDiag diag;
 
     App_RuntimeGetDiag(&diag);
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu\r\n",
+                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,SENSOR_LOOP=%lu,SENSOR_PUBLISH=%lu,SENSOR_LAST_PUBLISH_TICK=%lu,SENSOR_ADC1_READ_FAIL=%lu,SENSOR_ADC2_READ_FAIL=%lu\r\n",
                    (unsigned long)diag.rx_isr_count,
                    (unsigned long)diag.rx_byte_count,
                    (unsigned long)diag.rx_overflow_count,
@@ -163,7 +163,12 @@ static void App_AtReplyDiag(void)
                    (unsigned long)diag.tx_call_count,
                    (unsigned long)diag.tx_completed_count,
                    (unsigned long)diag.tx_timeout_count,
-                   (unsigned long)diag.tx_error_count);
+                   (unsigned long)diag.tx_error_count,
+                   (unsigned long)diag.sensor_loop_count,
+                   (unsigned long)diag.sensor_publish_count,
+                   (unsigned long)diag.sensor_last_publish_tick,
+                   (unsigned long)diag.sensor_adc1_read_fail_count,
+                   (unsigned long)diag.sensor_adc2_read_fail_count);
     App_RuntimeSendText(&huart1, buffer);
     App_RuntimeSendOk();
 }
