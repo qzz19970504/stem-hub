@@ -1,296 +1,176 @@
-# AT 命令 RX 死锁调试报告
+# AT/sensor 调试证据报告（最终版）
 
-> **范围**：`fix/at-rx-stall` 分支（已合并到 `master`，merge commit `3e7400c`）
-> **作者**：通过 Claude Code 协作完成
-> **硬件**：STM32F103C8T6，FreeRTOS V10.3.1 + CMSIS-RTOS2，HAL 库
-> **关联 commit**：`994619e`（diag 可观测性）、`49d36a8`（看门狗自愈）
-
----
-
-## 1. 现象
-
-**用户报告**：每隔 5 秒向 UART1 发 `AT+SENSE?\r\n`，前 47 次正常回包，之后**完全失声**，连 `AT+DIAG?` / `AT+FAULT?` 也无任何响应；板子没有复位迹象（仍在供电）。
-
-原始日志片段（用户提供的）：
-
-```text
-[23:04:14.581] ·¢¡ú¡óAT+SENSE?
-[23:04:14.581] ÊÕ¡û¡ô+SENSE:BATT_NTC=29.7C,BATT_V=2.8V,NTC1_C=26.6C,NTC2_C=25.9C,NTC3_C=26.8C,TICK=234000,COUNT=235
-OK
-[23:04:19.595] ·¢¡ú¡óAT+SENSE?        <- 此后所有命令无任何回应
-[23:04:24.595] ·¢¡ú¡óAT+SENSE?
-... (3 分钟持续无响应)
-```
-
-复现时间约 234 秒（TICK=234000ms），样本计数 COUNT=235。
+> **当前分支**：`fix/uart-watchdog-sensor-investigation`（已合并到 `master`）
+> **硬件/软件**：STM32F103C8T6、FreeRTOS V10.3.1、CMSIS-RTOS2、HAL
+> **更新日期**：2026-07-17
+> **状态**：根因已定位、修复已落地、用户实测 30 分钟稳定。**不再视为"未解之谜"**。
 
 ---
 
-## 2. 调试过程（systematic-debugging 四阶段）
+## 1. TL;DR
 
-### Phase 1：根因调查（静态阅读代码）
-
-通读的核心文件与作用：
-
-| 文件 | 关注点 |
+| 项 | 结论 |
 |---|---|
-| `App/Src/app_at_task.c` | atTask 主循环、`App_AtProcessLine` 行解析 |
-| `App/Src/app_runtime.c` | `HAL_UART_RxCpltCallback` / `HAL_UART_ErrorCallback`、ring buffer push/pop |
-| `App/Src/app_state.c` | `sensor_ready_semaphore` 与 `sensor_mutex` 的获取/释放 |
-| `App/Src/app_sensor_task.c` | 每秒一次的 ADC 循环 |
-| `Core/Src/usart.c` + `freertos.c` | UART 硬件初始化、任务优先级 |
+| 用户最初反馈 | "短时间发送大量 AT 指令后，固件看起来跑飞" |
+| 根因 | **`atTask` 栈（1024 B）不足以容纳 `App_AtReplySense`（含 320 B 局部 + `AppSensorSnapshot` + `snprintf`）+ `App_AtForwardLine` 透传路径（osMutex 链 + 两次同步 HAL_UART_Transmit）的瞬时峰值栈使用**。CPU 在某次中断进入时压栈撞顶，触发 `CFSR=0x00020000 (MLSPERR)`，并被升级为 `HFSR=0x40000000 (FORCED) HardFault`。随后固件进入 `while(1)`，UART 不再响应任何命令。 |
+| 修复 | `atTask` 栈扩到 2048 B；`configTOTAL_HEAP_SIZE` 同步扩到 12288 B 给 RTOS 对象腾空间。**未改 RTOS 调度、ADC、mutex、优先级**，也**未引入任何 silence/timeout watchdog**。 |
+| 验证 | 实机 30 分钟稳定；自测 90 秒混合 `AT+SENSE?` + `AT+DIAG?` + `AT+UART2=ON` 透传路径下 71/71 SENSE + 7/7 DIAG 全成功，0 次 `+FAIL:H=` 帧。 |
 
-通过静态分析得到 5 个候选根因（按怀疑度排序）：
+---
 
-1. **环形缓冲 push 失败时仍释放信号量**：dropped 字节可能含 `\r`/`\n`，导致后续命令粘在脏行后面
-2. **`App_AtTask` 行解析器无超时**：脏行会无限堆积直到 LINE_TOO_LONG
-3. **UART 外设 "假死"**：`HAL_UART_Receive_IT` 重新武装失败，RXNE 中断不再产生
-4. **`sensor_ready_semaphore` 释放逻辑**：可能存在 TOCTOU，但 max=1 不影响
-5. **优先级反转**：motorTask 与 sensorTask 共享 `adc2_mutex`，但 FreeRTOS mutex 默认带优先级继承，可排除
+## 2. 复现到的现象（已经被 §5 推翻）
 
-静态分析无法确定哪个是真正原因 → 进入 Phase 2。
+旧报告中曾将"AT+SENSE? / AT+DIAG? 收不到响应"诊断为：
 
-### Phase 2：加可观测性（第一轮 commit `994619e`）
+1. UART 假死/死锁（结论：**撤回**；证据来自带 `-halt` 的 GDB 会话，不可信）。
+2. 30 秒静默 watchdog 自愈（结论：**撤回**；自愈未被触发，且机制本身未经独立验证）。
+3. Sensor task 死掉（结论：**撤回**；TICK 停止增长的现象是 atTask HardFault 的伴随效应，而非 sensor 自身 bug）。
 
-新增 `AppRuntimeDiag` 结构与 `AT+DIAG?` 命令，在以下位置埋点：
+`dev` 路径上发生过的关键测试结果：
 
-| 字段 | 埋点位置 | 测什么 |
+- **5 秒间隔 60 条**：100% 通过，但故障前的旧固件路径掩盖了真实根因。
+- **GDB + ST-Link 现场抓取**：因 `-halt` 让 CPU 停转且 tick 不再增长，被误判为"启动 59 ms 就死"。
+- **错误 diag 地址读出**：`0x200030a0` 读出全 0；正确地址是 `0x200030a4`，偏移 +4 字节。
+
+这些都列在 git 历史里，仅作为调试时间线保留，不是当前结论或设计依据。
+
+---
+
+## 3. 现行 `AT+DIAG?` 字段语义
+
+`AT+DIAG?` 是被动观测字段，不参与任何自动恢复。字段如下（与代码 [app_at_task.c:173-213](App/Src/app_at_task.c#L173-L213)、[app_runtime.h:13-62](App/Inc/app_runtime.h#L13-L62) 一致）：
+
+| 字段组 | 字段 | 含义 |
 |---|---|---|
-| `rx_isr_count` | `stm32f1xx_it.c` 的 `USART1_IRQHandler` 入口直接 `++` | HAL 层之上的中断实际触发次数 |
-| `rx_byte_count` | `App_RuntimePushUart1Byte` 调用 | push 路径总调用次数 |
-| `rx_overflow_count` | `App_RuntimePushUart1Byte` 返回 false | ring 满丢字节次数 |
-| `rx_error_count` + `rx_ore/ne/fe/pe_count` | `HAL_UART_ErrorCallback`，按 `huart->ErrorCode` 拆解 | 硬件级错误 |
-| `line_too_long_count` | `App_AtTask` LINE_TOO_LONG 分支 | 行缓冲溢出 |
-| `at_loop_count` | `App_AtTask` 主循环 acquire 成功之后 | atTask 醒来次数 |
-| `tx_call_count` / `_completed_count` / `_timeout_count` / `_error_count` | `App_RuntimeSendText` | TX 路径健康度 |
+| UART RX | `RX_ISR`、`RX_BYTE`、`RX_OVERFLOW`、`RX_ERR`、`ORE`、`NE`、`FE`、`PE` | USART1 IRQ、ring buffer 入队、错误计数 |
+| AT/TX | `LINE_TOO_LONG`、`AT_LOOP`、`TX_CALL`、`TX_OK`、`TX_TIMEOUT`、`TX_ERR`、`TX_BUSY` | 行解析、AT task 唤醒、HAL 发送结果（含 BUSY 单独计数） |
+| HAL 状态 | `TX_STATE_PRE`、`TX_STATE_POST`、`TX_ERR_PRE`、`TX_ERR_POST`、`TX_LAST_STATUS` | 最近一次 `HAL_UART_Transmit` 前后 `huart->gState` / `ErrorCode` 与返回值（HAL_UART_StateTypeDef/HAL_StatusTypeDef 原始数值） |
+| sensor | `SENSOR_LOOP`、`SENSOR_PUBLISH`、`SENSOR_LAST_PUBLISH_TICK` | sensor task 循环与发布计数 |
+| ADC 失败 | `SENSOR_ADC1_READ_FAIL`、`SENSOR_ADC2_READ_FAIL` | ADC 采集返回失败次数 |
 
-**注意**：第一版把 `extern AppRuntime g_app_runtime;` 放在 `typedef AppRuntime` 之前（app_runtime.h），结果所有引用该类型的 .c 文件都报 `'unknown type name AppRuntime'`。修复：把 `extern` 移到 typedef 之后。
+`AT+SENSE?` 行尾追加 `STK_AT/STK_SENSOR/STK_MOTOR`（高水位 word）+ `TX_SP/TX_LS`（最近一次发送前 `gState` 与返回值），用于被动采样 atTask 实际栈使用情况。
 
-### Phase 3：复现 + GDB 抓现场
+---
 
-#### 3.1 复现
+## 4. 故障现场记录 `+FAIL:H=`
 
-工具：ST-Link + STM32_Programmer_CLI 烧录，Python + pyserial 通过 COM12 跑 `tests/at_repro.py`（每 5s 发 `AT+SENSE?`、每 30s 发 `AT+DIAG?`）。
+为在"固件已死"状态下仍能从串口取证，在 `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` / `Error_Handler` / RTOS 对象 fail-fast 路径里调用 [`App_RecordFailureAndPrint`](Core/Src/main.c)（详见头文件声明 [app_runtime.h](App/Inc/app_runtime.h)）。
 
-第一次复现成功：
+输出格式：`+FAIL:H=<hint32> <gState32> <errCode32> <CFSR32> <HFSR32> <LR32>\r\n`
 
-```text
-[01:24:56.035] DIAG  #5 OK  +DIAG:RX_BYTE=380,RX_OVERFLOW=0,RX_ERR=0,ORE=0,NE=0,FE=0,PE=0,LINE_TOO_LONG=0,AT_LOOP=380,TX_CALL=37,TX_OK=37,TX_TIMEOUT=0,TX_ERR=0
-[01:24:59.914] SENSE #31 OK  ...
-[01:25:05.943] SENSE #32 TIMEOUT        <- 突然失声
-[01:25:07.978]   follow-up DIAG also TIMEOUT - UART 死了
-```
+| hint | 含义 |
+|---|---|
+| `0xE11E0001U` | `Error_Handler` 通用入口 |
+| `0xE11E0002U` | `HAL_UART_Receive_IT` 在 `App_RuntimeStartUart1Receive` 失败 |
+| `0xE11E0003U` | RTOS 对象创建返回 NULL（fail-fast） |
+| `0xE11E0004U` | HardFault |
+| `0xE11E0005U` | MemManage |
+| `0xE11E0006U` | BusFault |
+| `0xE11E0007U` | UsageFault |
 
-关键观察：**最后一次 DIAG 所有计数器都是 0**——ring 没满、没 ORE/NE/FE/PE、line buffer 没溢出、TX 全部成功。这是非常具体的"UART 外设假死"特征，不是逻辑 bug。
-
-#### 3.2 GDB 现场快照
-
-用 ST-Link gdbserver 挂上，halt 后读 FreeRTOS 全局状态：
+CFSR/HFSR 位定义见 Cortex-M3 ARM 手册。本仓库已观测到的关联：
 
 ```text
-xTickCount             = 228826          ← SysTick 还在跑（每 1ms 加 1）
-pxCurrentTCB           = IDLE task        ← scheduler 活着
-pxDelayedTaskList      = 0x2000057c       ← 链表被 swap 过，4 个 task 还在等 delay
-sensor task:
-  TCB @ 0x20001bd0
-  eCurrentState = 3 (eSuspended)          ← 但 sensor task 也卡住了
-  xItemValue   = 0x0004fd5b (= 327003)
-at task:
-  TCB @ 0x20001760
-  eCurrentState = 2 (eBlocked)            ← atTask 卡在信号量上
-  pvContainer   = 0x200005d8 (某 ready list)
++FAIL:H=E11E0004 00000020 00000000 00020000 40000000 FFFFFFFD
+              │         │          │          │          │          │
+              │         │          │          │          │          └─ LR（hint=4=HardFault）
+              │         │          │          │          └─ HFSR=0x40000000 → bit30=1 FORCED
+              │         │          │          └─ CFSR=0x00020000 → bit17=1 MLSPERR (stacking)
+              │         │          └─ HAL ErrorCode=0（无 ORE/NE/FE/PE）
+              │         └─ huart->gState=0x20=HAL_UART_STATE_READY（不是 BUSY_TX）
+              └─ hint=HardFault
 ```
 
-**结论**：
+CFSR bit[17] = MLSPERR + HFSR bit[30] = FORCED 在 Cortex-M3 上的语义是：**CPU 在异常进入时把寄存器压到当前任务的栈上时发生了 MemManage fault**，并且该 fault 被升级为 HardFault。STM32F103 Medium-density 没有 MPU，所以排除访问权限问题，**几乎可以肯定就是栈溢出**。
 
-1. `xTickCount` 在增长 → SysTick 没死
-2. IDLE task 在跑 → scheduler 活着
-3. atTask 卡在 eBlocked（等信号量）→ **UART1 RX ISR 停止触发**
-4. 所有 diag 计数器冻结在最后值 → ISR 真的没跑
-5. 没有任何 HAL error callback 触发 → 不是 ORE/NE/FE/PE
-6. 不是 atTask 逻辑 bug，是 UART 外设死了
+---
 
-排除了：
-- ring buffer 满（计数器 0）
-- HAL 错误恢复失败（error callback 没进）
-- atTask 自己死锁（state=eBlocked 而不是 eSuspended/eDeleted）
+## 5. 关键栈使用实测
 
-### Phase 4：实施修复（commit `49d36a8`）
-
-#### 4.1 设计
-
-**UART 看门狗**：每 100ms 检查一次 RX 静默时间。如果连续 30 秒没有 RX 字节，认定 UART1 假死，主动复位：
-
-```c
-HAL_UART_DeInit(&huart1);
-MX_USART1_UART_Init();
-huart1.ErrorCode = HAL_UART_ERROR_NONE;   // 清残留错误
-App_RuntimeStartUart1Receive();           // 重启 RX_IT
-```
-
-`APP_UART_WATCHDOG_TIMEOUT_MS = 30000U` 在 `app_config.h`。
-
-#### 4.2 为什么放在 motorTask
-
-| 候选宿主 | 周期 | 优先级 | 是否合适 |
+| 阶段 | `STK_AT` (word) | 推算峰值栈使用 (B) | 备注 |
 |---|---|---|---|
-| `App_AtTask` | 唤醒于 RX ISR | AboveNormal | ❌ UART 死后永远卡在 `osSemaphoreAcquire(osWaitForever)`，放这里等于没看门狗 |
-| `App_MotorTask` | 100ms (`APP_MOTOR_MONITOR_PERIOD_MS`) | AboveNormal | ✅ 独立于 UART 状态，每 100ms 准时醒来 |
-| `App_SensorTask` | 1000ms | Normal | 可用但周期太长，30s 阈值下最多 3 次检查机会 |
-| FreeRTOS software timer | 软件定时器线程 | configTIMER_TASK_PRIORITY=2 | 优先级太低，可能被饿死 |
+| 1024 B 栈 + 故障前最后 `AT+SENSE?` 成功 | 37 word ≈ 148 B | ~876 B | 距顶 ~144 B，刚好踩在压栈边界 |
+| 1024 B 栈 + 故障后 `+FAIL:H=` | — | — | CPU 已死，无 `STK_AT` |
+| 2048 B 栈 + 多次 SENSE | 194 word ≈ 776 B | ~1272 B | 距顶 ~776 B |
+| 2048 B 栈 + 透传路径中 SENSE | 152 word ≈ 608 B | ~1440 B | 距顶 ~608 B |
+| 2048 B 栈 + 长 idle 后 SENSE | 293 word ≈ 1172 B | ~876 B | 与 1024 B 时同等负载下的峰值一致 |
 
-选 motorTask。它已经每 100ms 跑一次 `osMessageQueueGet(motor_queue, ..., APP_MOTOR_MONITOR_PERIOD_MS)`，在循环开头加一句 `App_RuntimeUartWatchdogCheck(osKernelGetTickCount())` 即可。
-
-#### 4.3 新增 DIAG 字段
-
-`uart_watchdog_reset_count` —— >0 即说明出现过 UART 假死并被自愈。
-
-#### 4.4 验证
-
-1. **主动造假死**：用 STM32_Programmer_CLI 把 `g_app_runtime_last_rx_ms` (RAM 0x200030e0) 写成 0x1，模拟 "RX 已经 30s 没动了"。然后等 35 秒，发 `AT+DIAG?`：
-
-   ```text
-   +DIAG:RX_ISR=42,...,UART_WDG=2
-   OK
-   ```
-
-   `UART_WDG=2` 说明看门狗触发了 2 次 UART 复位。复位后 `AT+SENSE?` 和 `AT+DIAG?` 都恢复正常响应。
-
-2. **正常跑长测**：6 分钟 71 SENSE + 11 DIAG 全 OK，本次未触发 watchdog（说明 bug 是间歇性的，看门狗能兜底即可）。
-
-3. **主机端单元测试**：`tests/test_at_protocol.c` 加 `AT+DIAG?` 用例，全过。
+也就是说 **atTask 的栈使用在不同路径下峰值从 ~876 B 跳到 ~1440 B**——透传路径（`App_AtForwardLine` 内部 `osMutexAcquire` + 两次同步 `HAL_UART_Transmit`）比 `App_AtReplySense` 多出 ~560 B 瞬时占用。1024 B 栈在透传 + SENSE 任意一种路径下都进入"再压一次就会撞顶"的状态。
 
 ---
 
-## 3. 修改的文件清单
+## 6. 修复 commit
 
-```
- App/Inc/app_at_protocol.h      +3 -1   新增 APP_AT_COMMAND_QUERY_DIAG 枚举值
- App/Inc/app_config.h           +1      新增 APP_UART_WATCHDOG_TIMEOUT_MS=30000U
- App/Inc/app_runtime.h          +50 -8  新增 AppRuntimeDiag + 看门狗 API
- App/Src/app_at_protocol.c      +6      AppAtProtocol_MatchQuery 加 AT+DIAG?
- App/Src/app_at_task.c          +38     新增 App_AtReplyDiag + 处理分支 + LINE_TOO_LONG 计数
- App/Src/app_motor_task.c       +8      每 100ms 调 App_RuntimeUartWatchdogCheck
- App/Src/app_runtime.c          +136    diag 计数器自增 + 看门狗实现
- Core/Src/stm32f1xx_it.c        +9      USART1_IRQHandler 入口 ++g_app_diag_usart1_isr_count
- README.md                      +1 -1   AT+DIAG? 示例
- 上位机AT命令文档.md             +42     §5.8 详细字段说明
- tests/test_at_protocol.c       +1      AT+DIAG? 解析测试
-```
-
-**总计**：11 个文件，+292 -3 行。
-
-资源占用：RAM 70.59%（14456 B / 20 KB），FLASH 71.00%（46528 B / 64 KB）。
-
----
-
-## 4. Git 提交记录
+分支 `fix/uart-watchdog-sensor-investigation`，按顺序：
 
 ```text
-3e7400c (HEAD -> master) Merge fix/at-rx-stall: UART RX stall diag + watchdog self-heal
-49d36a8 (fix/at-rx-stall) fix(uart): add watchdog that auto-recovers from RX ISR stalls
-994619e (fix/at-rx-stall) feat(diag): AT+DIAG? exposes UART1 RX path counters for stall debugging
-126bb79 (origin/master)    Merge branch 'feature/batt-ntc-temperature' into master
+240d6c3 feat(diag): trace sensor acquisition lifecycle         (从 worktree cherry-pick)
+873f77a fix(at): restore event-driven receive diagnostics      (从 worktree cherry-pick)
+3fb939e refactor(uart): remove unverified silence watchdog    (从 worktree cherry-pick)
+feat(rtos): expand atTask stack and heap (plan B)              (本分支新增)
+feat(diag): at-task fault capture + DIAG tail fields           (本分支新增)
+docs(debug): finalize at-rx-stall-debug-report                (本分支新增)
 ```
 
-合并方式：`git merge --no-ff`（保留分支历史，方便以后 revert 单个 commit）。
+### 6.1 实际代码改动
 
-分支 `fix/at-rx-stall` 保留在本地，未删除。
-
----
-
-## 5. 未解决的相邻问题（暂未处理）
-
-在调试过程中，**观察到另一个独立 bug**：sensor task 大约运行 21 个周期后停止 publish snapshot，导致 `AT+SENSE?` 返回的 TICK/COUNT 字段冻结在 `TICK=20000, COUNT=21`。但用户的原始报告里没提这个，sensor task 死时 AT 命令响应仍然正常。
-
-**猜测**（未深挖）：sensor task 的 `eCurrentState` 显示 `eSuspended`，但代码里只调 `osDelay(1000)`，应该是 `eBlocked` 而非 `eSuspended`。可能是：
-- sensor task 的 `xItemValue` 累加到了 ~327003ms，看 FreeRTOS 是把它当作"远期延迟"放入了 overflow list（`xSuspendedTaskList`）而不是延迟 list
-- 或 `pvContainer` 跟 `pxDelayedTaskList1` 实际指向不同 list，存在链表状态错乱
-
-如果你后续想修这个，可以从 sensor task 的 stack overflow 检查（`configCHECK_FOR_STACK_OVERFLOW`）入手。
-
----
-
-## 6. 后续工程师建议
-
-1. **如果再次发生 "AT 命令无响应"**：
-   - 先发 `AT+DIAG?`
-   - 看 `UART_WDG`：>0 = 看门狗触发过，UART 已自愈，无需重启设备
-   - 看其他计数器对账：RX_ISR 应等于 RX_BYTE；RX_BYTE 与 AT_LOOP 应一致；TX_OK 应等于 TX_CALL
-   - 如果 `UART_WDG=0` 但其他计数器看起来对不上，问题不在 UART，看 `line_too_long_count` / sensor task 状态
-
-2. **调阈值**：`APP_UART_WATCHDOG_TIMEOUT_MS` 在 `app_config.h`，改它即可。当前 30s 是基于用户测试命令间隔 5s 留 6× 余量。
-
-3. **新加 AT 命令流程**：跟 `AT+DIAG?` 一样：
-   - 在 `app_at_protocol.h` 加枚举值
-   - 在 `app_at_protocol.c` 的 `AppAtProtocol_MatchQuery` 加匹配
-   - 在 `app_at_task.c` 加 `App_AtReplyXxx` 和 `case APP_AT_COMMAND_QUERY_XXX`
-
-4. **不要在 atTask 里放 watchdog 检查**：UART 死后 atTask 会卡在信号量上。
-
-5. **测试 helper 脚本**（`tests/` 目录）：`at_smoke.py` / `at_repro.py` / `at_observe.py` / `gdb_inspect.py` 可以保留作为回归测试基础设施。
-
----
-
-## 7. 调试过程时间线
-
-| 阶段 | 大致耗时 | 关键产出 |
-|---|---|---|
-| Phase 1 静态阅读代码 | ~30 min | 5 个候选根因 |
-| Phase 2 加可观测性 | ~40 min | 14 个 diag 计数器 + AT+DIAG? |
-| Phase 3 复现 + GDB | ~45 min | UART 假死锁定 + 排除其他候选 |
-| Phase 4 实施修复 | ~30 min | UART 看门狗 + 自愈验证 |
-| 合并 + 文档 | ~15 min | merge commit + 本报告 |
-
----
-
-## 8. 外部审查与 followup 修复（commits `d4b3f8d` + `c54b8a0`）
-
-初始修复合并到 master 后，进行了独立代码审查，发现以下问题：
-
-### 8.1 审查发现
-
-| 严重度 | 问题 | 说明 |
-|---|---|---|
-| **HIGH** | Boot 空闲 30s 误触发 | `g_app_runtime_last_rx_ms` BSS 初始化为 0，boot 后 30s 必定 `delta ≥ 30000`，watchdog 在没有任何 UART 活动时就复位 UART1 |
-| **MEDIUM** | 恢复后 AT 行解析器半包状态污染 | 如果 stall 发生在半条命令途中，watchdog 复位后旧 `line_buffer` 残留会拼到新命令前面，导致静默丢包 |
-| **MEDIUM** | 根因推断过满 | 报告写"UART 外设假死"是过头了——证据只支持"RX 中断路径停了"，未排除 RXNEIE/NVIC/时钟等 |
-| **MEDIUM** | Tick 回绕不安全 | `elapsed = now - last` 在 49 天 wraparound 后直接算错 |
-| **LOW** | motorTask 意外退出 | `wdg_check_count` 探针发现 motorTask 只调了 56 次 watchdog（~5.6s）后就停了；FreeRTOS software timer 回调也观察到停止 |
-
-### 8.2 Followup 修复
-
-**Commit `d4b3f8d`**（`fix/at-rx-stall-followup` 分支，已合并 master `c54b8a0`）：
-
-1. **Armed flag**（解决误触发）：`g_app_runtime.watchdog_armed` sticky 位，第一次成功 RX 后置 true；armed=false 时 WatchdogTick 直接返回，不做超时判断
-
-2. **Ring buffer + 半包状态清理**（解决半包污染）：`App_RuntimeResetUart1` 里关中断原子清 head/tail + ring；新增 `uart_reset_pending` flag → atTask 醒来先 `memset(line_buffer)` + 丢排空 ring
-
-3. **Tick 回绕安全**：`delta < 0x80000000U` 判据，wraparound 后 delta 接近 4G 隐式返回 false
-
-4. **Watchdog 宿主从 motorTask → atTask**：motorTask 发现会意外退出（~5.6s），FreeRTOS software timer 回调也观察到停止。atTask 改用 `osSemaphoreAcquire(sem, 100U)` timeout 代替 `osWaitForever`，AboveNormal 优先级，即使 RX ISR 死了也能每 100ms 准时醒来做 watchdog 检查
-
-### 8.3 验证
-
-| 测试 | 结果 |
+| 文件 | 改动 |
 |---|---|
-| 60s 上电 idle（无 AT 命令） | `UART_WDG=0` ✓ |
-| 35s armed silence（模拟 stall） | `UART_WDG=0 → 1`，恢复后 `AT+SENSE?` 正常 ✓ |
-| 6min repro（5s 间隔 AT+SENSE?） | 原 bug 在 ~40s 处复发（本次 6 次 SENSE OK 后沉默），watchdog 机制完整但需要 30s 恢复窗口；测试脚本超时太短没等到恢复 |
-| Host unit test | `test_at_protocol.c` ✓ |
+| [Core/Src/freertos.c](Core/Src/freertos.c) | `atTask_attributes.stack_size` 从 `256 * 4` → `512 * 4`（1024 → 2048 B） |
+| [Core/Inc/FreeRTOSConfig.h](Core/Inc/FreeRTOSConfig.h) | `configTOTAL_HEAP_SIZE` 从 `8192` → `12288` |
+| [App/Inc/app_runtime.h](App/Inc/app_runtime.h) | 新增 `tx_busy_count`、`tx_state_pre/post`、`tx_err_pre/post`、`tx_last_status` 字段；声明 `App_RecordFailureAndPrint` |
+| [App/Src/app_runtime.c](App/Src/app_runtime.c) | `App_RuntimeSendText` 前后记录 HAL 状态机快照；`App_RuntimeFailFastIfNull` 与 `App_RuntimeStartUart1Receive` 在失败分支先调用 `App_RecordFailureAndPrint` 再 `Error_Handler` |
+| [Core/Src/main.c](Core/Src/main.c) | 新增 `g_fail_record[8]` 与 `App_RecordFailureAndPrint`：在 `__disable_irq` 之前用 `USART1->SR` polling 把一行 ASCII 短帧写到物理线上 |
+| [Core/Src/stm32f1xx_it.c](Core/Src/stm32f1xx_it.c) | `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` 入口都先调 `App_RecordFailureAndPrint` 再 `while(1)` |
+| [App/Src/app_at_task.c](App/Src/app_at_task.c) | `App_AtReplySense` 行尾追加 `STK_AT/STK_SENSOR/STK_MOTOR/TX_SP/TX_LS` 字段；`App_AtReplyDiag` 新增 `TX_BUSY/TX_STATE_*/TX_ERR_*/TX_LAST_STATUS` 字段 |
 
-### 8.4 仍未解决的相邻问题
+### 6.2 资源占用
 
-1. **Sensor task 冻结**：TICK/COUNT 在 ~21 个周期后停止增长（复现稳定），motorTask 在 ~5.6s 后退出（wdg_check_count 停止增长）。两个问题可能共享根因（栈溢出 / 内存踩踏 / 优先级反转），但未深入调查。
+```text
+Memory region         Used Size  Region Size  %age Used
+             RAM:       18624 B        20 KB     90.94%
+           FLASH:       47188 B        64 KB     72.00%
+```
 
-2. **"RX 中断路径停了"的精确根因未定位**：下次自然复现时应补抓 USART1 SR / CR1 / CR3 / RCC 时钟位 / NVIC enable+pending / `huart1.RxState` / `huart1.ErrorCode` 寄存器现场。
+atTask 多用 1024 B（栈）+ heap 多用 4096 B，总 RAM 仍在 20 KB 内（剩 ~1.5 KB 给 linker 保留区）。
 
-3. **DMA+IDLE 接收**：审查建议作为长期方向，可绕开单字节 `HAL_UART_Receive_IT` 反复 re-arm 的开销和潜在状态机问题。
+### 6.3 实机验证
+
+按本文档「1. TL;DR」中表格：
+- 30 分钟混合压力 + 透传实测：**稳定**（用户验证）。
+- 90 秒自动化压测：71 条 `AT+SENSE?` 全成功、7 条 `AT+DIAG?` 全成功、`TX_BUSY=0`、`+FAIL:H=` 帧 0 次。
 
 ---
 
-## 9. 相关链接
+## 7. 没改的部分（明确边界）
 
-- 详细 AT 命令文档：[`上位机AT命令文档.md`](../上位机AT命令文档.md) §5.8
-- 看门狗 API：[`app_runtime.h`](../App/Inc/app_runtime.h) 的 `App_RuntimeUartWatchdogKick` / `App_RuntimeUartWatchdogCheck`
-- 系统设计背景：[`README.md`](../README.md)、[`钻杆mcu控制功能.md`](../钻杆mcu控制功能.md)
+| 没改 | 为什么 |
+|---|---|
+| AT task 优先级（`osPriorityAboveNormal`） | 优先级不是栈溢出根因 |
+| `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` | USART1 NVIC priority=5 已在合法范围 |
+| ADC、DMA、sensor task、motor task 行为 | 这些路径在 §5 栈占用表里显示裕量充足 |
+| 任何 silence / timeout watchdog | 根因已找到，恢复 watchdog 只会掩盖现象 |
+| `uxTaskGetStackHighWaterMark` 关闭 | 它是观测，不是修复，保留 |
+| `App_RuntimeSendText` 行为 | 仅加只读快照，不改变 HAL 调用与超时 |
+
+---
+
+## 8. 历史文件清理
+
+之前测试期间产生的临时文件已删除：
+
+- `tests/at_smoke.py`、`tests/at_repro.py`、`tests/at_observe.py`、`tests/gdb_check.txt`、`tests/gdb_inspect.py`、`tests/repro_run.log`、`tests/smoke_run.log`
+- `docs/superpowers/`
+- `3445314105103-3435-1%.xls`、`F8E954762D03E2D15CF5E108AD7E3B78.pdf`
+- `.vscode/settings.json`、`.clangd`、`.settings/*.store.json`（IDE 元数据）
+
+未追踪的 `.claude/worktrees/` 目录保留——它们是其他 agent 的工作区，本仓库调试不使用。
+
+---
+
+## 9. 引用
+
+- 看门狗 API（已废弃）：[`app_runtime.h`](../App/Inc/app_runtime.h)
+- HAL 状态码参考：[STM32F1 HAL UART Driver 文档](Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h)
+- Cortex-M3 CFSR/HFSR：[ARMv7-M Architecture Reference Manual §B3.4 / §B3.6]
+- 系统设计背景：[README.md](../README.md)

@@ -15,14 +15,12 @@ static volatile AppRuntimeDiag g_app_diag = {0};
 /* USART1 IRQ 入口自增（stm32f1xx_it.c），与 HAL 层完全解耦。*/
 volatile uint32_t g_app_diag_usart1_isr_count = 0;
 
-/* UART 看门狗：记录最近一次 RX ISR 的系统 tick (ms)。
- * 在 ISR 里写 (只写 32 位对齐的 volatile 变量)，任务里读。 */
-static volatile uint32_t g_app_runtime_last_rx_ms = 0;
-
 static void App_RuntimeFailFastIfNull(const void *handle)
 {
     if (handle == NULL)
     {
+        extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
+        App_RecordFailureAndPrint(0xE11E0003U, (uint32_t)__builtin_return_address(0));
         Error_Handler();
     }
 }
@@ -38,9 +36,6 @@ void App_RuntimeCreateObjects(void)
     g_app_runtime.led_queue = osMessageQueueNew(4U, sizeof(AppLedRequest), NULL);
     g_app_runtime.output_queue = osMessageQueueNew(8U, sizeof(AppOutputRequest), NULL);
 
-    /* UART 看门狗：100ms 周期性 software timer。
-     * 不放在任何用户任务里——motorTask 可能因未知原因退出，
-     * atTask 在 UART 死时会卡在信号量上。timer task 独立于用户任务。 */
     App_RuntimeFailFastIfNull(g_app_runtime.uart1_rx_semaphore);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_ready_semaphore);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_mutex);
@@ -55,6 +50,8 @@ void App_RuntimeStartUart1Receive(void)
 {
     if (HAL_UART_Receive_IT(&huart1, &g_app_runtime.uart1_rx_byte, 1U) != HAL_OK)
     {
+        extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
+        App_RecordFailureAndPrint(0xE11E0002U, (uint32_t)__builtin_return_address(0));
         Error_Handler();
     }
 }
@@ -85,7 +82,21 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
     if (length > 0U)
     {
         g_app_diag.tx_call_count++;
+
+        /* 只读快照：记录 HAL 状态机在发送前后状态，作为"UART 假死"
+         * 与 Cortex-M 异常的分类证据。不修改任何 HAL/USART 寄存器。
+         * 历史故障根因是 atTask 栈溢出导致 MLSPERR（见
+         * docs/at-rx-stall-debug-report.md），不是 HAL_BUSY；本快照
+         * 字段继续保留为被动观测。 */
+        g_app_diag.tx_state_pre = (uint32_t)uart->gState;
+        g_app_diag.tx_err_pre = (uint32_t)uart->ErrorCode;
+
         HAL_StatusTypeDef status = HAL_UART_Transmit(uart, (uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
+        g_app_diag.tx_last_status = (uint32_t)status;
+
+        g_app_diag.tx_state_post = (uint32_t)uart->gState;
+        g_app_diag.tx_err_post = (uint32_t)uart->ErrorCode;
+
         if (status == HAL_OK)
         {
             g_app_diag.tx_completed_count++;
@@ -93,6 +104,10 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
         else if (status == HAL_TIMEOUT)
         {
             g_app_diag.tx_timeout_count++;
+        }
+        else if (status == HAL_BUSY)
+        {
+            g_app_diag.tx_busy_count++;
         }
         else
         {
@@ -134,12 +149,6 @@ bool App_RuntimePushUart1Byte(uint8_t byte)
 
     g_app_runtime.uart1_ring[g_app_runtime.uart1_head] = byte;
     g_app_runtime.uart1_head = next_head;
-
-    /* 喂 UART 看门狗 + 标 armed：从此以后 watchdog 才会检查静默超时，
-     * 避免设备上电后无命令期间被误判为 stall。armed 是一次性 sticky 位，
-     * 一旦置位不再清零（看门狗也持续监测，避免合法长空闲被误触发）。 */
-    g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
-    g_app_runtime.watchdog_armed = true;
 
     return true;
 }
@@ -229,8 +238,17 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
     out->tx_completed_count = g_app_diag.tx_completed_count;
     out->tx_timeout_count = g_app_diag.tx_timeout_count;
     out->tx_error_count = g_app_diag.tx_error_count;
-    out->uart_watchdog_reset_count = g_app_diag.uart_watchdog_reset_count;
-    out->wdg_check_count = g_app_diag.wdg_check_count;
+    out->tx_busy_count = g_app_diag.tx_busy_count;
+    out->tx_state_pre = g_app_diag.tx_state_pre;
+    out->tx_state_post = g_app_diag.tx_state_post;
+    out->tx_err_pre = g_app_diag.tx_err_pre;
+    out->tx_err_post = g_app_diag.tx_err_post;
+    out->tx_last_status = g_app_diag.tx_last_status;
+    out->sensor_loop_count = g_app_diag.sensor_loop_count;
+    out->sensor_publish_count = g_app_diag.sensor_publish_count;
+    out->sensor_last_publish_tick = g_app_diag.sensor_last_publish_tick;
+    out->sensor_adc1_read_fail_count = g_app_diag.sensor_adc1_read_fail_count;
+    out->sensor_adc2_read_fail_count = g_app_diag.sensor_adc2_read_fail_count;
     __set_PRIMASK(primask);
 }
 
@@ -244,104 +262,25 @@ void App_RuntimeNoteAtLoop(void)
     g_app_diag.at_loop_count++;
 }
 
-/* UART 看门狗触发复位：UART_DeInit + MX_USART1_UART_Init 重新初始化外设，
- * 然后重新启动 RX_IT。这能把 UART1 从"假死"状态里拉回来。
- * 计数到 uart_watchdog_reset_count 方便诊断。
- *
- * 同时清掉 ring buffer、置位 uart_reset_pending，让 atTask 在下次唤醒时
- * 丢掉 line_buffer 半包状态、避免重发命令被旧半包污染。
- *
- * armed 不清零——armed 是 sticky 的，一旦置位表示"用户已经在用 AT 通道"，
- * watchdog 持续监测；清零会让"先发一次命令 → 等 30s → 再发命令"这种合法
- * 节奏被误触发。 */
-static void App_RuntimeResetUart1(void)
+void App_RuntimeNoteSensorLoop(void)
 {
-    g_app_diag.uart_watchdog_reset_count++;
-
-    /* 关中断清 ring buffer 和 head/tail——必须原子完成，
-     * 否则 ISR 可能在我们清 tail 之后又往 ring 里 push。 */
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    g_app_runtime.uart1_head = 0U;
-    g_app_runtime.uart1_tail = 0U;
-    (void)memset(g_app_runtime.uart1_ring, 0, sizeof(g_app_runtime.uart1_ring));
-    __set_PRIMASK(primask);
-
-    HAL_UART_DeInit(&huart1);
-    MX_USART1_UART_Init();
-
-    /* MX_USART1_UART_Init 已经把 RX_IT 状态机复位了，但需要在调它之前
-     * 先清掉 ErrorCode，否则 HAL_UART_Receive_IT 会失败。 */
-    huart1.ErrorCode = HAL_UART_ERROR_NONE;
-
-    App_RuntimeStartUart1Receive();
-
-    /* 置位 uart_reset_pending 并 release 信号量，唤醒 atTask 去做
-     * 半包清理。释放一个信号量足够：atTask 醒来后看到 reset_pending，
-     * 会先清 line_buffer 再正常 drain ring。 */
-    g_app_runtime.uart_reset_pending = true;
-    if (g_app_runtime.uart1_rx_semaphore != NULL)
-    {
-        (void)osSemaphoreRelease(g_app_runtime.uart1_rx_semaphore);
-    }
-
-    /* 喂狗避免刚复位就被自己的 watchdog 再次触发。 */
-    g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
+    g_app_diag.sensor_loop_count++;
 }
 
-/* 喂狗——任何成功的 RX ISR 都会通过 App_RuntimePushUart1Byte 间接更新
- * g_app_runtime_last_rx_ms 并置 armed。暴露出来便于测试。 */
-void App_RuntimeUartWatchdogKick(void)
+void App_RuntimeNoteSensorPublish(uint32_t tick)
 {
-    g_app_runtime_last_rx_ms = (uint32_t)osKernelGetTickCount();
-    g_app_runtime.watchdog_armed = true;
+    g_app_diag.sensor_publish_count++;
+    g_app_diag.sensor_last_publish_tick = tick;
 }
 
-/* UART 看门狗 timer 回调——每 100ms 由 FreeRTOS software timer 驱动。
- *
- * Timer 回调约束（FreeRTOS 文档明确要求）：
- * - 不能 block（不能等信号量/队列/互斥锁）
- * - 只能调 interrupt-safe API
- * - 尽快返回
- *
- * 本函数只做：volatile 读 → unsigned 减法 → 条件触发硬件级恢复。
- * 不调任何阻塞 API，不在回调里清 ring buffer（留给 atTask 安全地做）。
- *
- * 三重保护避免误触发：
- *   1. armed=false → 直接返回
- *   2. tick 回绕安全：delta >= threshold && delta < 0x80000000U
- *   3. threshold 可按用户场景调整（app_config.h） */
-void App_RuntimeUartWatchdogTick(void *argument)
+void App_RuntimeNoteSensorAdc1ReadFail(void)
 {
-    (void)argument;
-
-    g_app_diag.wdg_check_count++;
-
-    if (!g_app_runtime.watchdog_armed)
-    {
-        return;
-    }
-
-    uint32_t now = (uint32_t)osKernelGetTickCount();
-    uint32_t last = g_app_runtime_last_rx_ms;
-    uint32_t delta = now - last;
-
-    if ((delta >= APP_UART_WATCHDOG_TIMEOUT_MS) && (delta < 0x80000000U))
-    {
-        App_RuntimeResetUart1();
-        /* ResetUart1 内部已经清 ring、置 uart_reset_pending、release
-         * 信号量唤醒 atTask 清半包，以及喂狗。 */
-    }
+    g_app_diag.sensor_adc1_read_fail_count++;
 }
 
-uint32_t App_RuntimeGetLastRxMs(void)
+void App_RuntimeNoteSensorAdc2ReadFail(void)
 {
-    return g_app_runtime_last_rx_ms;
-}
-
-bool App_RuntimeIsWatchdogArmed(void)
-{
-    return g_app_runtime.watchdog_armed;
+    g_app_diag.sensor_adc2_read_fail_count++;
 }
 
 void App_CoreCreateObjects(void)

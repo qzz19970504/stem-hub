@@ -52,6 +52,12 @@
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* 故障现场记录钩子：在 Cortex-M3 异常入口（HardFault/MemManage/BusFault/
+ * UsageFault）以及 Error_Handler / RTOS 对象失败分支被调用，
+ * 通过 USART1 寄存器级 polling 把一行 ASCII 短帧写到物理线上，
+ * 用于"固件即将进入 while(1)"状态下也能从串口拉到现场。 */
+extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
+
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -88,11 +94,16 @@ void NMI_Handler(void)
 
 /**
   * @brief This function handles Hard fault interrupt.
+  *
+  * 提示值 0xE11E0004U 用于在 +FAIL:H=... 帧中标识来源。
+  * 已知关联：本仓库"AT 命令后跑飞"复现中此处命中，
+  * 因 MemManage (MLSPERR) 升级为 HardFault；根因是 atTask 栈溢出，
+  * 修复见 commit `feat(rtos): expand atTask stack and heap (plan B)`。
   */
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  App_RecordFailureAndPrint(0xE11E0004U, (uint32_t)__builtin_return_address(0));
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -107,7 +118,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  App_RecordFailureAndPrint(0xE11E0005U, (uint32_t)__builtin_return_address(0));
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -122,7 +133,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  App_RecordFailureAndPrint(0xE11E0006U, (uint32_t)__builtin_return_address(0));
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -137,7 +148,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  App_RecordFailureAndPrint(0xE11E0007U, (uint32_t)__builtin_return_address(0));
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {

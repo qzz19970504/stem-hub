@@ -55,11 +55,16 @@ const osThreadAttr_t defaultTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for atTask */
+/* Definitions for atTask
+ *
+ * 栈 2048 B（512 * 4）：原 1024 B 时 atTask 在 App_AtReplySense（320 B
+ * 局部）+ 透传路径（osMutex + 两次同步 HAL_UART_Transmit）会撞顶，
+ * 触发 Cortex-M3 MLSPERR → HardFault，导致"AT 命令后跑飞"。
+ * 详见 docs/at-rx-stall-debug-report.md §6。 */
 osThreadId_t atTaskHandle;
 const osThreadAttr_t atTask_attributes = {
   .name = "atTask",
-  .stack_size = 256 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for sensorTask */
