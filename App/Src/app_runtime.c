@@ -19,6 +19,8 @@ static void App_RuntimeFailFastIfNull(const void *handle)
 {
     if (handle == NULL)
     {
+        extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
+        App_RecordFailureAndPrint(0xE11E0003U, (uint32_t)__builtin_return_address(0));
         Error_Handler();
     }
 }
@@ -48,6 +50,8 @@ void App_RuntimeStartUart1Receive(void)
 {
     if (HAL_UART_Receive_IT(&huart1, &g_app_runtime.uart1_rx_byte, 1U) != HAL_OK)
     {
+        extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
+        App_RecordFailureAndPrint(0xE11E0002U, (uint32_t)__builtin_return_address(0));
         Error_Handler();
     }
 }
@@ -78,7 +82,21 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
     if (length > 0U)
     {
         g_app_diag.tx_call_count++;
+
+        /* 只读快照：记录 HAL 状态机在发送前后状态，作为"UART 假死"
+         * 与 Cortex-M 异常的分类证据。不修改任何 HAL/USART 寄存器。
+         * 历史故障根因是 atTask 栈溢出导致 MLSPERR（见
+         * docs/at-rx-stall-debug-report.md），不是 HAL_BUSY；本快照
+         * 字段继续保留为被动观测。 */
+        g_app_diag.tx_state_pre = (uint32_t)uart->gState;
+        g_app_diag.tx_err_pre = (uint32_t)uart->ErrorCode;
+
         HAL_StatusTypeDef status = HAL_UART_Transmit(uart, (uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
+        g_app_diag.tx_last_status = (uint32_t)status;
+
+        g_app_diag.tx_state_post = (uint32_t)uart->gState;
+        g_app_diag.tx_err_post = (uint32_t)uart->ErrorCode;
+
         if (status == HAL_OK)
         {
             g_app_diag.tx_completed_count++;
@@ -86,6 +104,10 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
         else if (status == HAL_TIMEOUT)
         {
             g_app_diag.tx_timeout_count++;
+        }
+        else if (status == HAL_BUSY)
+        {
+            g_app_diag.tx_busy_count++;
         }
         else
         {
@@ -216,6 +238,12 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
     out->tx_completed_count = g_app_diag.tx_completed_count;
     out->tx_timeout_count = g_app_diag.tx_timeout_count;
     out->tx_error_count = g_app_diag.tx_error_count;
+    out->tx_busy_count = g_app_diag.tx_busy_count;
+    out->tx_state_pre = g_app_diag.tx_state_pre;
+    out->tx_state_post = g_app_diag.tx_state_post;
+    out->tx_err_pre = g_app_diag.tx_err_pre;
+    out->tx_err_post = g_app_diag.tx_err_post;
+    out->tx_last_status = g_app_diag.tx_last_status;
     out->sensor_loop_count = g_app_diag.sensor_loop_count;
     out->sensor_publish_count = g_app_diag.sensor_publish_count;
     out->sensor_last_publish_tick = g_app_diag.sensor_last_publish_tick;

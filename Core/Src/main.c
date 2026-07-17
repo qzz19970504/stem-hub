@@ -60,6 +60,105 @@ void MX_FREERTOS_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+#include <stdint.h>
+#include "usart.h"
+#include "stm32f1xx_hal.h"
+
+/* 故障现场记录 + 最后机会 UART 输出。
+ *
+ * 在 HardFault/MemManage/BusFault/UsageFault 入口以及 Error_Handler /
+ * RTOS 对象创建失败等"固件即将进入 while(1) 死循环"的关键点被调用。
+ * 不依赖任何 RTOS/HAL callback，不读任何 task 栈——只读全局 huart1 句柄
+ * 与 Cortex-M3 系统控制块寄存器，并直接轮询 USART1->SR/DR 寄存器，
+ * 在 __disable_irq 之前把一行 ASCII 短帧写到 UART1 物理线上。
+ *
+ * 字段（g_fail_record[8]）：
+ *   [0] = magic (0xFA115E11)
+ *   [1] = huart1.gState (触发时刻)
+ *   [2] = huart1.ErrorCode
+ *   [3] = SCB->CFSR (Configurable Fault Status)
+ *   [4] = SCB->HFSR (HardFault Status)
+ *   [5] = LR（链接寄存器，反映调用现场）
+ *   [6] = hint（来自调用者的来源估计，0 = 未知）
+ *   [7] = magic XOR（用于校验）
+ *
+ * UART1 输出格式：`+FAIL:H=<hint32> <gState32> <errCode32> <CFSR32>
+ *                  <HFSR32> <LR32>\r\n`
+ *
+ * 已知关联：本仓库"AT 命令后跑飞"复现中 CFSR=0x00020000 (MLSPERR) +
+ * HFSR=0x40000000 (FORCED)，即 atTask 栈溢出导致 MemManage 升级为
+ * HardFault。修复见 commit `feat(rtos): expand atTask stack and heap
+ * (plan B)` 与 docs/at-rx-stall-debug-report.md §6。 */
+static volatile uint32_t g_fail_record[8] = {0};
+
+void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value)
+{
+    if (g_fail_record[0] == 0xFA115E11U)
+    {
+        /* 已经被记录过，避免重复覆盖现场。 */
+        return;
+    }
+
+    g_fail_record[0] = 0xFA115E11U;
+    g_fail_record[1] = (uint32_t)huart1.gState;
+    g_fail_record[2] = (uint32_t)huart1.ErrorCode;
+    g_fail_record[3] = (uint32_t)SCB->CFSR;
+    g_fail_record[4] = (uint32_t)SCB->HFSR;
+    g_fail_record[5] = lr_value;
+    g_fail_record[6] = hint;
+    g_fail_record[7] = 0xFA115E11U ^ g_fail_record[1] ^ g_fail_record[2] ^
+                       g_fail_record[3] ^ g_fail_record[4] ^ g_fail_record[5] ^
+                       g_fail_record[6];
+
+    /* 在 __disable_irq 之前用 polling 输出一段 ASCII 短帧；这样即使
+     * 接下来进入 while(1)，PC 端也能在串口监视器里读到这次失败原因。 */
+    const char *prefix = "+FAIL:H=";
+    for (const char *p = prefix; *p != '\0'; ++p)
+    {
+        while ((USART1->SR & USART_SR_TXE) == 0U)
+        {
+        }
+        USART1->DR = (uint16_t)(*p & 0x01FFU);
+    }
+
+    static const char hex[] = "0123456789ABCDEF";
+    uint32_t values[6] = {
+        hint,
+        g_fail_record[1],
+        g_fail_record[2],
+        g_fail_record[3],
+        g_fail_record[4],
+        g_fail_record[5]
+    };
+    for (uint32_t i = 0U; i < 6U; ++i)
+    {
+        for (int32_t s = 28; s >= 0; s -= 4)
+        {
+            uint8_t nibble = (uint8_t)((values[i] >> (uint32_t)s) & 0x0FU);
+            while ((USART1->SR & USART_SR_TXE) == 0U)
+            {
+            }
+            USART1->DR = (uint16_t)(hex[nibble] & 0x01FFU);
+        }
+        if (i + 1U < 6U)
+        {
+            while ((USART1->SR & USART_SR_TXE) == 0U)
+            {
+            }
+            USART1->DR = (uint16_t)(' ' & 0x01FFU);
+        }
+    }
+
+    while ((USART1->SR & USART_SR_TXE) == 0U)
+    {
+    }
+    USART1->DR = (uint16_t)('\r' & 0x01FFU);
+    while ((USART1->SR & USART_SR_TXE) == 0U)
+    {
+    }
+    USART1->DR = (uint16_t)('\n' & 0x01FFU);
+}
+
 static void App_PreInitMotorSafeState(void)
 {
   GPIO_InitTypeDef safe_gpio = {0};
@@ -217,6 +316,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  App_RecordFailureAndPrint(0xE11E0001U, (uint32_t)__builtin_return_address(0));
   __disable_irq();
   while (1)
   {

@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "cmsis_os.h"
+#include "task.h"
+
 #include "app_at_protocol.h"
 #include "app_config.h"
 #include "app_led.h"
@@ -12,6 +15,12 @@
 #include "app_runtime.h"
 #include "app_state.h"
 #include "app_sensor.h"
+
+/* task handle 在 freertos.c 里以 file-scope 全局定义；这里 extern 复用，
+ * 不引入新头文件依赖，避免触动 CubeMX USER CODE 块。*/
+extern osThreadId_t atTaskHandle;
+extern osThreadId_t sensorTaskHandle;
+extern osThreadId_t motorTaskHandle;
 
 static void App_AtForwardLine(const char *line)
 {
@@ -56,7 +65,7 @@ static int App_AtFormatTempCenti(char *out, size_t out_size, int32_t centi_c)
 
 static void App_AtReplySense(void)
 {
-    char buffer[256];
+    char buffer[320];
     AppSensorSnapshot snapshot;
     long batt_mv = 0L;
     unsigned long batt_v_int = 0UL;
@@ -65,6 +74,18 @@ static void App_AtReplySense(void)
     char ntc1_str[8];
     char ntc2_str[8];
     char ntc3_str[8];
+
+    /* 高水位 (HighWaterMark) 单位 = StackType_t word (4 B)。
+     * 在 SENSE 行尾追加 STK_AT/STK_SENSOR/STK_MOTOR，便于上位机被动采样，
+     * 不引入新 task、不动 RTOS 配置/栈分配。
+     * 历史背景：这些字段在排查 atTask 栈溢出时引入；详见
+     * docs/at-rx-stall-debug-report.md §3 之后的章节。 */
+    UBaseType_t stk_at = (atTaskHandle != NULL)
+        ? uxTaskGetStackHighWaterMark((TaskHandle_t)atTaskHandle) : 0U;
+    UBaseType_t stk_sensor = (sensorTaskHandle != NULL)
+        ? uxTaskGetStackHighWaterMark((TaskHandle_t)sensorTaskHandle) : 0U;
+    UBaseType_t stk_motor = (motorTaskHandle != NULL)
+        ? uxTaskGetStackHighWaterMark((TaskHandle_t)motorTaskHandle) : 0U;
 
     if (!App_SensorTryGetSnapshot(&snapshot))
     {
@@ -89,9 +110,16 @@ static void App_AtReplySense(void)
     (void)App_AtFormatTempCenti(ntc2_str, sizeof(ntc2_str), snapshot.ntc2.physical_value);
     (void)App_AtFormatTempCenti(ntc3_str, sizeof(ntc3_str), snapshot.ntc3.physical_value);
 
+    /* TX 状态机快照（HAL_StatusTypeDef 数值：0=OK,1=ERROR,2=BUSY,3=TIMEOUT）。
+     * 通过 AT+SENSE? 尾随字段暴露最近一次发送前的 huart->gState 与返回值，
+     * 用于区分 "UART 假死" vs "固件死了"。已知历史故障是栈溢出导致的
+     * MemManage + HardFault，而不是 HAL_BUSY；这些字段继续保留为被动观测。 */
+    AppRuntimeDiag tail_diag;
+    App_RuntimeGetDiag(&tail_diag);
+
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu\r\nOK\r\n",
+                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu,STK_AT=%lu,STK_SENSOR=%lu,STK_MOTOR=%lu,TX_SP=%lu,TX_LS=%lu\r\nOK\r\n",
                    batt_ntc_str,
                    batt_v_int,
                    batt_v_dec,
@@ -99,7 +127,12 @@ static void App_AtReplySense(void)
                    ntc2_str,
                    ntc3_str,
                    (unsigned long)snapshot.sample_tick,
-                   (unsigned long)snapshot.sample_counter);
+                   (unsigned long)snapshot.sample_counter,
+                   (unsigned long)stk_at,
+                   (unsigned long)stk_sensor,
+                   (unsigned long)stk_motor,
+                   (unsigned long)tail_diag.tx_state_pre,
+                   (unsigned long)tail_diag.tx_last_status);
     App_RuntimeSendText(&huart1, buffer);
 }
 
@@ -139,7 +172,13 @@ static void App_AtReplyMotor(void)
 }
 
 /* 诊断应答：暴露 UART1 RX 路径上的关键计数器，用于排查 "AT 命令收不到响应"。
- * 字段含义见 AppRuntimeDiag（app_runtime.h）。非关键路径，不影响其它 AT 命令。 */
+ * 字段含义见 AppRuntimeDiag（app_runtime.h）。非关键路径，不影响其它 AT 命令。
+ *
+ * 历史：TX_BUSY、TX_STATE_PRE/POST、TX_ERR_PRE/POST、TX_LAST_STATUS 这几个
+ * HAL 状态机快照字段是在排查 "AT 命令后跑飞" 时加入的；当时怀疑是 HAL 假死，
+ * 最终实机证据 (CFSR=0x00020000, HFSR=0x40000000) 证明根因是 atTask 栈溢出
+ * 导致 MLSPERR + FORCED HardFault，与 HAL_BUSY 无关。这些字段保留为被动观测，
+ * 不参与任何自动恢复或 watchdog 行为。详见 docs/at-rx-stall-debug-report.md。 */
 static void App_AtReplyDiag(void)
 {
     char buffer[512];
@@ -149,7 +188,7 @@ static void App_AtReplyDiag(void)
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,SENSOR_LOOP=%lu,SENSOR_PUBLISH=%lu,SENSOR_LAST_PUBLISH_TICK=%lu,SENSOR_ADC1_READ_FAIL=%lu,SENSOR_ADC2_READ_FAIL=%lu\r\n",
+                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,TX_BUSY=%lu,TX_STATE_PRE=%lu,TX_STATE_POST=%lu,TX_ERR_PRE=%lu,TX_ERR_POST=%lu,TX_LAST_STATUS=%lu,SENSOR_LOOP=%lu,SENSOR_PUBLISH=%lu,SENSOR_LAST_PUBLISH_TICK=%lu,SENSOR_ADC1_READ_FAIL=%lu,SENSOR_ADC2_READ_FAIL=%lu\r\n",
                    (unsigned long)diag.rx_isr_count,
                    (unsigned long)diag.rx_byte_count,
                    (unsigned long)diag.rx_overflow_count,
@@ -164,6 +203,12 @@ static void App_AtReplyDiag(void)
                    (unsigned long)diag.tx_completed_count,
                    (unsigned long)diag.tx_timeout_count,
                    (unsigned long)diag.tx_error_count,
+                   (unsigned long)diag.tx_busy_count,
+                   (unsigned long)diag.tx_state_pre,
+                   (unsigned long)diag.tx_state_post,
+                   (unsigned long)diag.tx_err_pre,
+                   (unsigned long)diag.tx_err_post,
+                   (unsigned long)diag.tx_last_status,
                    (unsigned long)diag.sensor_loop_count,
                    (unsigned long)diag.sensor_publish_count,
                    (unsigned long)diag.sensor_last_publish_tick,

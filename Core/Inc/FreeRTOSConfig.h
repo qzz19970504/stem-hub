@@ -64,7 +64,10 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)8192)
+/* FreeRTOS 堆从 8 KiB 扩到 12 KiB：atTask 栈扩到 2 KiB 后剩余 RAM
+ * 不足以容纳原有任务栈 + RTOS 对象，因此同步扩 heap。详细证据与
+ * 资源占用见 docs/at-rx-stall-debug-report.md §6。 */
+#define configTOTAL_HEAP_SIZE                    ((size_t)12288)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
