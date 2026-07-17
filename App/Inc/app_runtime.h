@@ -43,6 +43,11 @@ typedef struct
     uint32_t tx_completed_count;
     uint32_t tx_timeout_count;
     uint32_t tx_error_count;
+    uint32_t sensor_loop_count;
+    uint32_t sensor_publish_count;
+    uint32_t sensor_last_publish_tick;
+    uint32_t sensor_adc1_read_fail_count;
+    uint32_t sensor_adc2_read_fail_count;
 } AppRuntimeDiag;
 
 typedef struct
@@ -82,5 +87,9 @@ bool App_RuntimeReadAdc2Channel(uint32_t channel, uint16_t *raw_value);
 void App_RuntimeGetDiag(AppRuntimeDiag *out);
 void App_RuntimeNoteLineTooLong(void);
 void App_RuntimeNoteAtLoop(void);
+void App_RuntimeNoteSensorLoop(void);
+void App_RuntimeNoteSensorPublish(uint32_t tick);
+void App_RuntimeNoteSensorAdc1ReadFail(void);
+void App_RuntimeNoteSensorAdc2ReadFail(void);
 
 #endif
