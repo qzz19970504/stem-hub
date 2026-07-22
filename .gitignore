@@ -4,3 +4,5 @@ mx.scratch
 .pdf
 .xls
 *.exe
+*.local.json
+.claude/worktrees/
