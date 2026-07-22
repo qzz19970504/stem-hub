@@ -419,7 +419,7 @@ AT+SENSE?
 #### 5.5.2 响应格式
 
 ```text
-+SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1_C=<value>C,NTC2_C=<value>C,NTC3_C=<value>C,TICK=<value>,COUNT=<value>
++SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1_C=<value>C,NTC2_C=<value>C,NTC3_C=<value>C,MOTOR_I=<value>A,TICK=<value>,COUNT=<value>,STK_AT=<value>,STK_SENSOR=<value>,STK_MOTOR=<value>,TX_SP=<value>,TX_LS=<value>
 OK
 ```
 
@@ -432,7 +432,10 @@ OK
 | NTC1_C | NTC1 温度（℃），保留 1 位小数（如 25.3C、-5.2C），查表法实现 |
 | NTC2_C | NTC2 温度（℃），格式同 NTC1_C |
 | NTC3_C | NTC3 温度（℃），格式同 NTC1_C |
+| MOTOR_I | DRV8874 IPROPI 电流，保留 1 位小数（如 0.8A、2.9A）。0.1 A 分辨率，最高 2.9 A（ADC 物理满量程；电机不在 FWD/REV 时固定为 0.0A）。 |
 | TICK | 本次样本写入时的系统 Tick |
+| STK_AT / STK_SENSOR / STK_MOTOR | atTask / sensorTask / motorTask 栈高水位（word），被动观测字段 |
+| TX_SP / TX_LS | 最近一次发送前的 `huart->gState` 与返回值（HAL 状态机快照），被动观测字段 |
 | COUNT | 样本计数 |
 
 NTC 拓扑为 3V3 -- NTC -- ADC测点 -- 470Ω -- GND。
@@ -441,9 +444,17 @@ BATT_NTC（电池 NTC，ADC1 IN4）使用 3435K 系 NTC，电阻分压比相同�
 - BATT_NTC 范围 -55°C ~ +125°C，钳位到表外时分别返回 -55.0C / 125.0C。读数为 0（开路）时钳位到 -55.0C，读数 ≥ 3300mV（短路）时返回 ERR。  
 - NTC1/NTC2/NTC3 使用 HNTC0603-103F3450FA，范围 -40°C ~ +125°C，钳位到表外时分别返回 -40.0C / 125.0C。读数为 0（开路）时钳位到 -40.0C，读数 ≥ 3300mV（短路）时返回 ERR。
 
+MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：  
+- 拓扑：IPROPI -- [R19=2.5kΩ] -- GND → ADC2 IN8。  
+- 公式：`I(A) = V_IPROPI(V) / (AIPROPI × R19) = V_IPROPI(V) / 1.125`（AIPROPI 取 450 µA/A）。  
+- 寄存器输出 0.1 A 分辨率整数 (deci-A)：`motor_current_a_deci = round(mA / 100)`，上限钳到 29 (= 2.9 A)。  
+- 仅当电机在 FWD/REV 时刷值；SLEEP/WAKE/BRAKE/STOP 一律为 0。  
+- > 3 A 的强短路靠 DRV8874 自身的 IOCP 处理（datasheet IOCP = 6~10 A），IPROPI 路径在 2.93 A 处 ADC 饱和。
+
 注意：
 
 - BATT_NTC / NTC1_C / NTC2_C / NTC3_C 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大（Vadc 已 < 25mV）。
+- MOTOR_I 由电机状态产生，sensorTask 每秒最多更新一次；上次残值不影响停机显示（电机模式 ≠ FWD/REV 时强制归零）。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
 
 ### 5.6 故障查询命令
@@ -497,7 +508,7 @@ OK
 
 注意：
 
-- CURRENT_MA 当前是基于 ADC 电压的占位换算值，不代表最终精确毫安值。
+- CURRENT_MA 基于 IPROPI 镜像电流公式换算 (`I_mA = V_mV × 1000 / 1125`)，单位为毫安整数。Vref=3.3V 下 IPROPI 路径的最大量程 ≈ 2.93 A（= 2933 mA），更高读数受 ADC 饱和限制。需 0.1 A 分辨率或停机归零语义请用 `AT+SENSE?` 的 `MOTOR_I` 字段。
 - 当电流读数超过当前阈值时，固件会转入制动并置位 OVERCURRENT。
 
 ### 5.8 诊断查询命令

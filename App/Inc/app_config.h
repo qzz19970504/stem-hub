@@ -18,6 +18,18 @@
 #define APP_ADC_MAX_VALUE 4095U
 #define APP_MOTOR_OVERCURRENT_THRESHOLD_MA 3000U
 
+/* DRV8874 IPROPI 电流采样 (ADC2_IN8):
+ * 拓扑: IPROPI -- [R19] -- GND。IPROPI 灌电流与低侧 MOSFET 电流按
+ * AIPROPI (µA/A) 比例镜像。I_LOAD = V_IPROPI / (AIPROPI × R19)。
+ * A=450µA/A, R19=2.5kΩ ⇒ 1.125 V/A。Vref=3.3V ⇒ 可测上限 ≈ 2.93 A
+ * (ADC 在 ~2.93 A 时饱和；超过 3 A 的强短路靠 DRV8874 IOCP 处理，
+ * 当前 ADC 路径只能汇报 ≤ 29.3 dA)。
+ * AT+MOTOR? 输出 CURRENT_MA = millivolts * 1000 / 1125；
+ * AT+SENSE? 输出 MOTOR_I = deci-A 整数 (= mA / 100 四舍五入)。
+ * 见 app_motor_task.c::App_MotorConvertCurrent。*/
+#define APP_MOTOR_IPROPI_AIPROPI_UA_PER_A  450U
+#define APP_MOTOR_IPROPI_R19_OHMS         2500U
+
 /* Battery voltage divider: VBAT -- [R_TOP] --+-- [R_BOTTOM] -- GND
  *                                          |
  *                                          +--- ADC1 IN5

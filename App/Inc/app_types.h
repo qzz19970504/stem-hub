@@ -22,6 +22,11 @@ typedef struct
     AppAnalogMeasure ntc3;
     uint32_t sample_tick;
     uint32_t sample_counter;
+    /* DRV8874 IPROPI 电流 (来自 motor 状态)：
+     *   0.1 A 分辨率，上限钳在 29 (= 2.9 A)，ADC 物理满量程 (≈2.93 A) 已在
+     *   sensor_task 里换算时限制；
+     *   电机不在 FWD/REV 时一律报告 0（不显示上次残值）。*/
+    uint32_t motor_current_a_deci;
 } AppSensorSnapshot;
 
 typedef struct
