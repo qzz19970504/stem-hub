@@ -1,6 +1,11 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+/* 固件版本号。上位机通过 AT+VERSION? 查询此字符串用于握手；
+ * bump 版本只需改这一行。保持简短——回包整体长度受
+ * APP_AT_PROTOCOL_MAX_LINE_LENGTH (48) 约束。*/
+#define APP_FIRMWARE_VERSION "release-v2.1"
+
 #define APP_UART1_RING_BUFFER_SIZE 256U
 #define APP_UART1_LINE_BUFFER_SIZE 128U
 #define APP_UART_TX_TIMEOUT_MS 100U

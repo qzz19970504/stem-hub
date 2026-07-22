@@ -44,14 +44,15 @@ int main(void)
     assert(command.type == APP_AT_COMMAND_SET_NMOS1);
     assert(command.data.output.enabled == true);
 
-    assert(AppAtProtocol_Parse("AT+UVLO=OFF\r\n", &command));
-    assert(command.type == APP_AT_COMMAND_SET_EN_UVLO);
+    assert(AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));
+    assert(command.type == APP_AT_COMMAND_SET_LM51770);
     assert(command.data.output.enabled == false);
 
     expect_query_command("AT+SENSE?\r\n", APP_AT_COMMAND_QUERY_SENSE);
     expect_query_command("AT+FAULT?\r\n", APP_AT_COMMAND_QUERY_FAULT);
     expect_query_command("AT+MOTOR?\r\n", APP_AT_COMMAND_QUERY_MOTOR);
     expect_query_command("AT+DIAG?\r\n", APP_AT_COMMAND_QUERY_DIAG);
+    expect_query_command("AT+VERSION?\r\n", APP_AT_COMMAND_QUERY_VERSION);
 
     assert(AppAtProtocol_IsAtCommand("AT+LED=ON\r\n"));
     assert(!AppAtProtocol_IsAtCommand("payload-data"));

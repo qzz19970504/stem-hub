@@ -179,6 +179,19 @@ static void App_AtReplyMotor(void)
  * 最终实机证据 (CFSR=0x00020000, HFSR=0x40000000) 证明根因是 atTask 栈溢出
  * 导致 MLSPERR + FORCED HardFault，与 HAL_BUSY 无关。这些字段保留为被动观测，
  * 不参与任何自动恢复或 watchdog 行为。详见 docs/at-rx-stall-debug-report.md。 */
+/* 握手 / 版本查询：返回 APP_FIRMWARE_VERSION（app_config.h 里改一行）。
+ * 上位机连上 UART1 后发 AT+VERSION?，收到回包即确认固件可解析且能应答。*/
+static void App_AtReplyVersion(void)
+{
+    char buffer[64];
+
+    (void)snprintf(buffer,
+                   sizeof(buffer),
+                   "+VERSION:%s\r\nOK\r\n",
+                   APP_FIRMWARE_VERSION);
+    App_RuntimeSendText(&huart1, buffer);
+}
+
 static void App_AtReplyDiag(void)
 {
     char buffer[512];
@@ -250,8 +263,12 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS2, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
-    case APP_AT_COMMAND_SET_EN_UVLO:
+    case APP_AT_COMMAND_SET_LM51770:
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_UVLO, command->data.output.enabled);
+        queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
+        break;
+    case APP_AT_COMMAND_SET_MP4317:
+        queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_MP4317, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
     case APP_AT_COMMAND_QUERY_SENSE:
@@ -265,6 +282,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         break;
     case APP_AT_COMMAND_QUERY_DIAG:
         App_AtReplyDiag();
+        break;
+    case APP_AT_COMMAND_QUERY_VERSION:
+        App_AtReplyVersion();
         break;
     default:
         App_RuntimeSendError("UNSUPPORTED");

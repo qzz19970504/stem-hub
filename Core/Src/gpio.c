@@ -54,11 +54,15 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
+  /* EN_UVLO (PB3) 默认拉高：LM51770 是低电平使能，高电平为关断。*/
   HAL_GPIO_WritePin(GPIOB, EN_IN1_Pin|PH_IN2_Pin|nSLEEP_Pin|EN_UVLO_Pin
                           |NMOS2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(EN_UVLO_GPIO_Port, EN_UVLO_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED2_Pin|NMOS1_Pin|LED3_Pin, GPIO_PIN_RESET);
+  /* PA8 (MP4317) 默认拉高：MP4317 是低电平使能，高电平为关断。*/
+  HAL_GPIO_WritePin(GPIOA, NMOS1_Pin|LED3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MP4317_GPIO_Port, MP4317_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : LED1_Pin */
   GPIO_InitStruct.Pin = LED1_Pin;
@@ -82,8 +86,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(nFAULT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LED2_Pin NMOS1_Pin LED3_Pin */
-  GPIO_InitStruct.Pin = LED2_Pin|NMOS1_Pin|LED3_Pin;
+  /*Configure GPIO pins : NMOS1_Pin LED3_Pin MP4317_Pin */
+  GPIO_InitStruct.Pin = NMOS1_Pin|LED3_Pin|MP4317_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

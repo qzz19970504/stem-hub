@@ -12,7 +12,9 @@
 - UART2 和 UART3 透传开关控制
 - LED 总开关控制
 - 电机模式控制与状态查询
-- NMOS1、NMOS2、EN/UVLO 控制
+- NMOS1、NMOS2 控制
+- MP4317 控制（PA8，AT+MP4317=ON/OFF）
+- LM51770 使能控制（PB3 EN/UVLO，AT+LM51770=ON/OFF）
 - 传感采样结果查询
 - nFAULT、nFLT 状态查询
 
@@ -150,7 +152,7 @@ ERROR:UNSUPPORTED
 - ERROR:STATE_BUSY：读取状态时互斥资源暂不可用
 - ERROR:LED_QUEUE：LED 控制消息入队失败
 - ERROR:MOTOR_QUEUE：电机控制消息入队失败
-- ERROR:OUTPUT_QUEUE：NMOS 或 UVLO 控制消息入队失败
+- ERROR:OUTPUT_QUEUE：NMOS、MP4317 或 LM51770 控制消息入队失败
 - ERROR:UNSUPPORTED：解析成功但当前版本不支持该类型
 
 ## 4. 指令总览
@@ -177,8 +179,10 @@ ERROR:UNSUPPORTED
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
-| 使能 | AT+UVLO=ON\r\n | 拉高 EN/UVLO，对应芯片断电 | OK |
-| 使能 | AT+UVLO=OFF\r\n | 拉低 EN/UVLO，对应芯片正常工作 | OK |
+| MP4317 | AT+MP4317=ON\r\n | 拉低 PA8，MP4317 进入工作 | OK |
+| MP4317 | AT+MP4317=OFF\r\n | 拉高 PA8，MP4317 关断 | OK |
+| LM51770 | AT+LM51770=ON\r\n | 拉低 EN/UVLO，LM51770 进入工作 | OK |
+| LM51770 | AT+LM51770=OFF\r\n | 拉高 EN/UVLO，LM51770 关断（默认状态） | OK |
 
 ### 4.2 查询类命令
 
@@ -188,6 +192,7 @@ ERROR:UNSUPPORTED
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 诊断 | AT+DIAG?\r\n | 查询 UART1 RX 路径关键计数器 |
+| 版本 | AT+VERSION?\r\n | 查询固件版本号，用于握手 |
 
 ### 4.3 兼容写法
 
@@ -288,9 +293,9 @@ OK
 
 说明：
 
-- LED1 为上电指示灯，由固件初始化阶段拉高。
-- LED2 和 LED3 与电机方向联动。
-- 这里的 ON/OFF 影响的是 LED2 和 LED3 的联动显示使能。
+- LED1 为上电指示灯，启动后 LED1 与 LED3 交替闪烁 5 秒（自检序列），之后熄灭进入正常工作状态。
+- LED1 和 LED3 与电机方向联动（LED1 = 前进，LED3 = 后退）。原 LED2 (PA8) 已取消。
+- 这里的 ON/OFF 影响的是 LED1 和 LED3 的联动显示使能。
 
 #### 5.2.2 关闭 LED 联动显示
 
@@ -357,7 +362,7 @@ AT+MOTOR=STOP
 
 当前版本中 STOP 与 BRAKE 的行为一致，都会让 EN 关闭并保持驱动唤醒。
 
-### 5.4 NMOS 与 UVLO 命令
+### 5.4 NMOS、MP4317 与 LM51770 命令
 
 #### 5.4.1 NMOS1 和 NMOS2
 
@@ -373,17 +378,35 @@ AT+NMOS2=OFF
 - ON 表示对应 GPIO 输出高电平。
 - OFF 表示对应 GPIO 输出低电平。
 
-#### 5.4.2 EN/UVLO
+#### 5.4.2 LM51770（PB3 EN/UVLO）
 
 ```text
-AT+UVLO=ON
-AT+UVLO=OFF
+AT+LM51770=ON
+AT+LM51770=OFF
 ```
 
 说明：
 
-- ON 表示拉高 EN/UVLO，引脚所控制芯片断电。
-- OFF 表示拉低 EN/UVLO，引脚所控制芯片恢复正常工作。
+- 控制 PB3（EN/UVLO）的输出电平，进而控制 LM51770 的使能。
+- LM51770 是低电平使能，所以：
+  - `AT+LM51770=ON` 把 PB3 拉低，LM51770 进入工作。
+  - `AT+LM51770=OFF` 把 PB3 拉高，LM51770 关断。
+- 默认状态（开机 / 复位后）：PB3 高、LM51770 关断。
+
+#### 5.4.3 MP4317（PA8 NMOS 控制）
+
+```text
+AT+MP4317=ON
+AT+MP4317=OFF
+```
+
+说明：
+
+- 控制 PA8 的输出电平。PA8 经外部 NMOS 控制 MP4317 的使能。
+- MP4317 是低电平使能，所以：
+  - `AT+MP4317=ON` 把 PA8 拉低，MP4317 开。
+  - `AT+MP4317=OFF` 把 PA8 拉高，MP4317 关。
+- 默认状态（开机 / 复位后）：PA8 高、MP4317 关。
 
 ### 5.5 传感查询命令
 
@@ -518,6 +541,35 @@ OK
 - 计数器从 0 开始累计，不掉电不清零。
 - 固件侧不阻塞、不重置这些计数器，仅在 `AT+DIAG?` 时拷快照输出。
 
+### 5.9 版本查询命令（握手）
+
+#### 5.9.1 请求格式
+
+```text
+AT+VERSION?
+```
+
+#### 5.9.2 响应格式
+
+```text
++VERSION:<version>
+OK
+```
+
+示例：
+
+```text
++VERSION:release-v2.1
+OK
+```
+
+说明：
+
+- 用于上位机连接 UART1 后的握手。拿到 `+VERSION:...` + `OK` 即可确认固件能解析且能应答。
+- `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
+- 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
+- 版本号可用于后续命令集能力协商（例如旧版本可能不识别 `AT+LM51770=` / `AT+MP4317=`）。
+
 ## 6. 透传规则
 
 ### 6.1 什么会被透传
@@ -566,7 +618,7 @@ AT+SENSE?
 2. 打开 UART2 或 UART3 透传，验证非 AT 数据转发是否正常。
 3. 查询一次 AT+SENSE?，确认传感任务已开始运行。
 4. 测试 AT+MOTOR=WAKE、AT+MOTOR=FWD、AT+MOTOR? 的闭环。
-5. 最后再联动 NMOS、UVLO 和故障读取。
+5. 最后再联动 NMOS、MP4317、LM51770 和故障读取。
 
 一个最小联调流程示例：
 
@@ -579,7 +631,8 @@ AT+MOTOR?
 AT+MOTOR=BRAKE
 AT+FAULT?
 AT+NMOS1=ON
-AT+UVLO=OFF
+AT+MP4317=ON
+AT+LM51770=ON
 ```
 
 ## 8. 上位机实现建议

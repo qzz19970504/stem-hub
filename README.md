@@ -192,8 +192,8 @@ at+led=on\r\n
 | AT+NMOS1=OFF | 关闭 NMOS1 |
 | AT+NMOS2=ON | 打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
-| AT+UVLO=ON | 拉高 EN/UVLO，引脚对应芯片断电 |
-| AT+UVLO=OFF | 拉低 EN/UVLO，引脚对应芯片正常工作 |
+| AT+LM51770=ON | 拉低 EN/UVLO，LM51770 进入工作 |
+| AT+LM51770=OFF | 拉高 EN/UVLO，LM51770 关断（默认状态） |
 
 #### 查询类
 
@@ -203,6 +203,7 @@ at+led=on\r\n
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 RX 路径关键计数器 | +DIAG:RX_ISR=1234,RX_BYTE=1234,RX_OVERFLOW=0,RX_ERR=0,ORE=0,NE=0,FE=0,PE=0,LINE_TOO_LONG=0,AT_LOOP=1234,TX_CALL=20,TX_OK=20,TX_TIMEOUT=0,TX_ERR=0,UART_WDG=0 |
+| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v2.1 |
 
 控制类命令成功时返回：
 
@@ -225,6 +226,15 @@ ERROR:LINE_TOO_LONG
 - 透传是否发送到 UART2、UART3，由对应的桥接开关决定。
 - AT 命令本身不会转发到 UART2 或 UART3。
 - 对于控制面，只有以完整 `\r\n` 结束的严格格式 AT 指令才会进入解析流程。
+
+### 上位机握手
+
+上位机连上 UART1 后，先发一次 `AT+VERSION?`，约定如下：
+
+- 成功回包：单行 `+VERSION:<version>` 后跟 `OK`。
+- 例：`+VERSION:release-v2.1\r\nOK\r\n`。
+- 拿到回包即确认固件可解析且能应答；版本号可用于后续命令集能力协商（例如旧版本可能不识别 `AT+LM51770=`）。
+- 超时建议：500 ms 之内没拿到 `OK` 即视为握手失败。
 
 ### 传感采样说明
 
@@ -343,10 +353,10 @@ stem-hub/
 | 功能 | 引脚 |
 | --- | --- |
 | LED1 | PC15 |
-| LED2 | PA8 |
 | LED3 | PA15 |
 | NMOS1 | PA12 |
 | NMOS2 | PB4 |
+| MP4317 (NMOS 控制) | PA8 |
 | EN/UVLO | PB3 |
 | EN/IN1 | PB12 |
 | PH/IN2 | PB13 |
@@ -425,7 +435,7 @@ AT+UART3=ON
 
 - nSLEEP 是否被正确拉高
 - EN/IN1 与 PH/IN2 接线是否对应
-- EN/UVLO 是否处于允许工作状态
+- LM51770 是否处于允许工作状态（`AT+LM51770=ON` 拉低 EN/UVLO）
 - 电机电流检测是否异常导致被误判过流
 
 ## 参与开发

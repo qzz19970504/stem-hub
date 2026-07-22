@@ -38,6 +38,7 @@ typedef struct
     bool nmos1_enabled;
     bool nmos2_enabled;
     bool uvlo_enabled;
+    bool mp4317_enabled;
 } AppIoStatus;
 
 typedef struct
@@ -54,7 +55,8 @@ typedef enum
 {
     APP_OUTPUT_TARGET_NMOS1 = 0,
     APP_OUTPUT_TARGET_NMOS2,
-    APP_OUTPUT_TARGET_UVLO
+    APP_OUTPUT_TARGET_UVLO,
+    APP_OUTPUT_TARGET_MP4317
 } AppOutputTarget;
 
 typedef struct
