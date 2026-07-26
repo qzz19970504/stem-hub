@@ -32,6 +32,8 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_protocol.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_uart_tunnel.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_bridge_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_sensor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_led_task.c

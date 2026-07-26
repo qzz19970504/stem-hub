@@ -65,6 +65,10 @@ typedef struct
     uint32_t sensor_last_publish_tick;
     uint32_t sensor_adc1_read_fail_count;
     uint32_t sensor_adc2_read_fail_count;
+    uint32_t uart2_rx_byte_count;
+    uint32_t uart2_rx_overflow_count;
+    uint32_t uart3_rx_byte_count;
+    uint32_t uart3_rx_overflow_count;
 } AppRuntimeDiag;
 
 typedef struct
@@ -73,8 +77,18 @@ typedef struct
     volatile uint16_t uart1_head;
     volatile uint16_t uart1_tail;
     uint8_t uart1_ring[APP_UART1_RING_BUFFER_SIZE];
+    uint8_t uart2_rx_byte;
+    volatile uint16_t uart2_head;
+    volatile uint16_t uart2_tail;
+    uint8_t uart2_ring[APP_UART_BRIDGE_RING_BUFFER_SIZE];
+    uint8_t uart3_rx_byte;
+    volatile uint16_t uart3_head;
+    volatile uint16_t uart3_tail;
+    uint8_t uart3_ring[APP_UART_BRIDGE_RING_BUFFER_SIZE];
     osSemaphoreId_t uart1_rx_semaphore;
+    osSemaphoreId_t bridge_rx_semaphore;
     osSemaphoreId_t sensor_ready_semaphore;
+    osMutexId_t uart_tx_mutex;
     osMutexId_t sensor_mutex;
     osMutexId_t adc2_mutex;
     osMutexId_t state_mutex;
@@ -93,11 +107,18 @@ extern volatile uint32_t g_app_diag_usart1_isr_count;
 void App_RuntimeCreateObjects(void);
 void App_RuntimeInit(void);
 void App_RuntimeStartUart1Receive(void);
+void App_RuntimeStartBridgeReceive(void);
+HAL_StatusTypeDef App_RuntimeSendBytes(UART_HandleTypeDef *uart,
+                                       const uint8_t *data,
+                                       uint16_t length,
+                                       uint32_t timeout);
 void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text);
 void App_RuntimeSendOk(void);
 void App_RuntimeSendError(const char *reason);
 bool App_RuntimePushUart1Byte(uint8_t byte);
 bool App_RuntimePopUart1Byte(uint8_t *byte);
+bool App_RuntimePopBridgeByte(uint8_t uart_index, uint8_t *byte);
+void App_RuntimeFlushBridgeRx(uint8_t uart_index);
 uint32_t App_RuntimeRawToMillivolts(uint16_t raw);
 bool App_RuntimeReadChannel(ADC_HandleTypeDef *adc, uint32_t channel, uint16_t *raw_value);
 bool App_RuntimeReadAdc2Channel(uint32_t channel, uint16_t *raw_value);

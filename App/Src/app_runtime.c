@@ -28,7 +28,10 @@ static void App_RuntimeFailFastIfNull(const void *handle)
 void App_RuntimeCreateObjects(void)
 {
     g_app_runtime.uart1_rx_semaphore = osSemaphoreNew(APP_UART1_RING_BUFFER_SIZE, 0U, NULL);
+    g_app_runtime.bridge_rx_semaphore =
+        osSemaphoreNew(APP_UART_BRIDGE_RING_BUFFER_SIZE * 2U, 0U, NULL);
     g_app_runtime.sensor_ready_semaphore = osSemaphoreNew(1U, 0U, NULL);
+    g_app_runtime.uart_tx_mutex = osMutexNew(NULL);
     g_app_runtime.sensor_mutex = osMutexNew(NULL);
     g_app_runtime.adc2_mutex = osMutexNew(NULL);
     g_app_runtime.state_mutex = osMutexNew(NULL);
@@ -37,7 +40,9 @@ void App_RuntimeCreateObjects(void)
     g_app_runtime.output_queue = osMessageQueueNew(8U, sizeof(AppOutputRequest), NULL);
 
     App_RuntimeFailFastIfNull(g_app_runtime.uart1_rx_semaphore);
+    App_RuntimeFailFastIfNull(g_app_runtime.bridge_rx_semaphore);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_ready_semaphore);
+    App_RuntimeFailFastIfNull(g_app_runtime.uart_tx_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.adc2_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.state_mutex);
@@ -56,6 +61,19 @@ void App_RuntimeStartUart1Receive(void)
     }
 }
 
+void App_RuntimeStartBridgeReceive(void)
+{
+    if (HAL_UART_Receive_IT(&huart2, &g_app_runtime.uart2_rx_byte, 1U) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    if (HAL_UART_Receive_IT(&huart3, &g_app_runtime.uart3_rx_byte, 1U) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
 void App_RuntimeInit(void)
 {
     HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_SET);
@@ -68,6 +86,7 @@ void App_RuntimeInit(void)
     HAL_GPIO_WritePin(PH_IN2_GPIO_Port, PH_IN2_Pin, GPIO_PIN_RESET);
 
     App_RuntimeStartUart1Receive();
+    App_RuntimeStartBridgeReceive();
 }
 
 uint32_t App_RuntimeRawToMillivolts(uint16_t raw)
@@ -75,9 +94,22 @@ uint32_t App_RuntimeRawToMillivolts(uint16_t raw)
     return ((uint32_t)raw * APP_ADC_VREF_MV) / APP_ADC_MAX_VALUE;
 }
 
-void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
+HAL_StatusTypeDef App_RuntimeSendBytes(UART_HandleTypeDef *uart,
+                                       const uint8_t *data,
+                                       uint16_t length,
+                                       uint32_t timeout)
 {
-    size_t length = strlen(text);
+    HAL_StatusTypeDef status = HAL_ERROR;
+
+    if ((uart == NULL) || (data == NULL) || (length == 0U))
+    {
+        return HAL_ERROR;
+    }
+
+    if (osMutexAcquire(g_app_runtime.uart_tx_mutex, osWaitForever) != osOK)
+    {
+        return HAL_BUSY;
+    }
 
     if (length > 0U)
     {
@@ -91,7 +123,7 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
         g_app_diag.tx_state_pre = (uint32_t)uart->gState;
         g_app_diag.tx_err_pre = (uint32_t)uart->ErrorCode;
 
-        HAL_StatusTypeDef status = HAL_UART_Transmit(uart, (uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
+        status = HAL_UART_Transmit(uart, (uint8_t *)data, length, timeout);
         g_app_diag.tx_last_status = (uint32_t)status;
 
         g_app_diag.tx_state_post = (uint32_t)uart->gState;
@@ -113,6 +145,26 @@ void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
         {
             g_app_diag.tx_error_count++;
         }
+    }
+
+    (void)osMutexRelease(g_app_runtime.uart_tx_mutex);
+    return status;
+}
+
+void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text)
+{
+    size_t length;
+
+    if (text == NULL)
+    {
+        return;
+    }
+
+    length = strlen(text);
+    if ((length > 0U) && (length <= UINT16_MAX))
+    {
+        (void)App_RuntimeSendBytes(
+            uart, (const uint8_t *)text, (uint16_t)length, APP_UART_TX_TIMEOUT_MS);
     }
 }
 
@@ -163,6 +215,101 @@ bool App_RuntimePopUart1Byte(uint8_t *byte)
     *byte = g_app_runtime.uart1_ring[g_app_runtime.uart1_tail];
     g_app_runtime.uart1_tail = (uint16_t)((g_app_runtime.uart1_tail + 1U) % APP_UART1_RING_BUFFER_SIZE);
     return true;
+}
+
+static bool App_RuntimePushBridgeByte(uint8_t uart_index, uint8_t byte)
+{
+    volatile uint16_t *head;
+    volatile uint16_t *tail;
+    uint8_t *ring;
+    uint16_t next_head;
+
+    if (uart_index == 2U)
+    {
+        head = &g_app_runtime.uart2_head;
+        tail = &g_app_runtime.uart2_tail;
+        ring = g_app_runtime.uart2_ring;
+        g_app_diag.uart2_rx_byte_count++;
+    }
+    else
+    {
+        head = &g_app_runtime.uart3_head;
+        tail = &g_app_runtime.uart3_tail;
+        ring = g_app_runtime.uart3_ring;
+        g_app_diag.uart3_rx_byte_count++;
+    }
+
+    next_head = (uint16_t)((*head + 1U) % APP_UART_BRIDGE_RING_BUFFER_SIZE);
+    if (next_head == *tail)
+    {
+        if (uart_index == 2U)
+        {
+            g_app_diag.uart2_rx_overflow_count++;
+        }
+        else
+        {
+            g_app_diag.uart3_rx_overflow_count++;
+        }
+        return false;
+    }
+
+    ring[*head] = byte;
+    *head = next_head;
+    return true;
+}
+
+bool App_RuntimePopBridgeByte(uint8_t uart_index, uint8_t *byte)
+{
+    volatile uint16_t *head;
+    volatile uint16_t *tail;
+    uint8_t *ring;
+
+    if (byte == NULL)
+    {
+        return false;
+    }
+
+    if (uart_index == 2U)
+    {
+        head = &g_app_runtime.uart2_head;
+        tail = &g_app_runtime.uart2_tail;
+        ring = g_app_runtime.uart2_ring;
+    }
+    else if (uart_index == 3U)
+    {
+        head = &g_app_runtime.uart3_head;
+        tail = &g_app_runtime.uart3_tail;
+        ring = g_app_runtime.uart3_ring;
+    }
+    else
+    {
+        return false;
+    }
+
+    if (*tail == *head)
+    {
+        return false;
+    }
+
+    *byte = ring[*tail];
+    *tail = (uint16_t)((*tail + 1U) % APP_UART_BRIDGE_RING_BUFFER_SIZE);
+    return true;
+}
+
+void App_RuntimeFlushBridgeRx(uint8_t uart_index)
+{
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    if (uart_index == 2U)
+    {
+        g_app_runtime.uart2_tail = g_app_runtime.uart2_head;
+    }
+    else if (uart_index == 3U)
+    {
+        g_app_runtime.uart3_tail = g_app_runtime.uart3_head;
+    }
+    __set_PRIMASK(primask);
 }
 
 bool App_RuntimeReadChannel(ADC_HandleTypeDef *adc, uint32_t channel, uint16_t *raw_value)
@@ -249,6 +396,10 @@ void App_RuntimeGetDiag(AppRuntimeDiag *out)
     out->sensor_last_publish_tick = g_app_diag.sensor_last_publish_tick;
     out->sensor_adc1_read_fail_count = g_app_diag.sensor_adc1_read_fail_count;
     out->sensor_adc2_read_fail_count = g_app_diag.sensor_adc2_read_fail_count;
+    out->uart2_rx_byte_count = g_app_diag.uart2_rx_byte_count;
+    out->uart2_rx_overflow_count = g_app_diag.uart2_rx_overflow_count;
+    out->uart3_rx_byte_count = g_app_diag.uart3_rx_byte_count;
+    out->uart3_rx_overflow_count = g_app_diag.uart3_rx_overflow_count;
     __set_PRIMASK(primask);
 }
 
@@ -306,6 +457,24 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
         App_RuntimeStartUart1Receive();
     }
+    else if (huart->Instance == USART2)
+    {
+        (void)App_RuntimePushBridgeByte(2U, g_app_runtime.uart2_rx_byte);
+        if (g_app_runtime.bridge_rx_semaphore != NULL)
+        {
+            (void)osSemaphoreRelease(g_app_runtime.bridge_rx_semaphore);
+        }
+        (void)HAL_UART_Receive_IT(&huart2, &g_app_runtime.uart2_rx_byte, 1U);
+    }
+    else if (huart->Instance == USART3)
+    {
+        (void)App_RuntimePushBridgeByte(3U, g_app_runtime.uart3_rx_byte);
+        if (g_app_runtime.bridge_rx_semaphore != NULL)
+        {
+            (void)osSemaphoreRelease(g_app_runtime.bridge_rx_semaphore);
+        }
+        (void)HAL_UART_Receive_IT(&huart3, &g_app_runtime.uart3_rx_byte, 1U);
+    }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -336,5 +505,15 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         huart->ErrorCode = HAL_UART_ERROR_NONE;
 
         App_RuntimeStartUart1Receive();
+    }
+    else if (huart->Instance == USART2)
+    {
+        huart->ErrorCode = HAL_UART_ERROR_NONE;
+        (void)HAL_UART_Receive_IT(&huart2, &g_app_runtime.uart2_rx_byte, 1U);
+    }
+    else if (huart->Instance == USART3)
+    {
+        huart->ErrorCode = HAL_UART_ERROR_NONE;
+        (void)HAL_UART_Receive_IT(&huart3, &g_app_runtime.uart3_rx_byte, 1U);
     }
 }

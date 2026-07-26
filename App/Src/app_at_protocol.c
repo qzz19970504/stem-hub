@@ -3,8 +3,6 @@
 #include <stddef.h>
 #include <string.h>
 
-#define APP_AT_PROTOCOL_MAX_LINE_LENGTH 48U
-
 static bool AppAtProtocol_ValidateFrame(const char *input, size_t *body_length)
 {
     size_t input_length = 0U;
@@ -42,6 +40,61 @@ static bool AppAtProtocol_ValidateFrame(const char *input, size_t *body_length)
     }
 
     *body_length = input_length - 2U;
+    return true;
+}
+
+static bool AppAtProtocol_DecodeHexNibble(char value, uint8_t *nibble)
+{
+    if ((value >= '0') && (value <= '9'))
+    {
+        *nibble = (uint8_t)(value - '0');
+        return true;
+    }
+
+    if ((value >= 'A') && (value <= 'F'))
+    {
+        *nibble = (uint8_t)(value - 'A' + 10);
+        return true;
+    }
+
+    return false;
+}
+
+static bool AppAtProtocol_ParseUartPayload(const char *value,
+                                           AppAtUartPayloadCommand *payload)
+{
+    size_t hex_length;
+    size_t index;
+
+    if ((value == NULL) || (payload == NULL))
+    {
+        return false;
+    }
+
+    hex_length = strlen(value);
+    if ((hex_length == 0U)
+        || ((hex_length % 2U) != 0U)
+        || (hex_length > (APP_UART_TUNNEL_CHUNK_SIZE * 2U)))
+    {
+        return false;
+    }
+
+    payload->length = hex_length / 2U;
+    for (index = 0U; index < payload->length; ++index)
+    {
+        uint8_t high;
+        uint8_t low;
+
+        if (!AppAtProtocol_DecodeHexNibble(value[index * 2U], &high)
+            || !AppAtProtocol_DecodeHexNibble(value[(index * 2U) + 1U], &low))
+        {
+            payload->length = 0U;
+            return false;
+        }
+
+        payload->bytes[index] = (uint8_t)((high << 4U) | low);
+    }
+
     return true;
 }
 
@@ -276,6 +329,13 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
     {
         out_command->type = APP_AT_COMMAND_SET_MP4317;
         out_command->data.output.enabled = enabled;
+        return true;
+    }
+
+    if (AppAtProtocol_MatchAssignment("AT+UARTTX=", command_body, &value)
+        && AppAtProtocol_ParseUartPayload(value, &out_command->data.uart_payload))
+    {
+        out_command->type = APP_AT_COMMAND_SEND_UART;
         return true;
     }
 

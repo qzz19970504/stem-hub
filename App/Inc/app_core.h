@@ -11,5 +11,6 @@ void App_SensorTask(void *argument);
 void App_MotorTask(void *argument);
 void App_LedTask(void *argument);
 void App_NmosTask(void *argument);
+void App_BridgeTask(void *argument);
 
 #endif
