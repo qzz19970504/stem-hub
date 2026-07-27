@@ -61,6 +61,27 @@ void App_RuntimeStartUart1Receive(void)
     }
 }
 
+static void App_RuntimeRearmReceiveIfReady(UART_HandleTypeDef *uart,
+                                           uint8_t *receive_byte)
+{
+    if ((uart == NULL) || (receive_byte == NULL))
+    {
+        return;
+    }
+
+    /*
+     * For a non-blocking NE/FE/PE error HAL can consume RXNE first. That calls
+     * HAL_UART_RxCpltCallback, which has already armed the next byte by the
+     * time HAL_UART_ErrorCallback runs. BUSY_RX therefore means recovery is
+     * complete, not a fatal HAL_BUSY failure. ORE ends the transfer and leaves
+     * RxState READY, so only that state needs an explicit rearm here.
+     */
+    if (uart->RxState == HAL_UART_STATE_READY)
+    {
+        (void)HAL_UART_Receive_IT(uart, receive_byte, 1U);
+    }
+}
+
 void App_RuntimeStartBridgeReceive(void)
 {
     if (HAL_UART_Receive_IT(&huart2, &g_app_runtime.uart2_rx_byte, 1U) != HAL_OK)
@@ -481,39 +502,41 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART1)
     {
+        uint32_t error_code = huart->ErrorCode;
+
         /* 把各类错误拆开计数：ore 可能是数据真的丢了；ne/fe/pe 更可能是线路噪声。 */
         g_app_diag.rx_error_count++;
-        if ((huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U)
+        if ((error_code & HAL_UART_ERROR_ORE) != 0U)
         {
             g_app_diag.rx_ore_count++;
         }
-        if ((huart->ErrorCode & HAL_UART_ERROR_NE) != 0U)
+        if ((error_code & HAL_UART_ERROR_NE) != 0U)
         {
             g_app_diag.rx_ne_count++;
         }
-        if ((huart->ErrorCode & HAL_UART_ERROR_FE) != 0U)
+        if ((error_code & HAL_UART_ERROR_FE) != 0U)
         {
             g_app_diag.rx_fe_count++;
         }
-        if ((huart->ErrorCode & HAL_UART_ERROR_PE) != 0U)
+        if ((error_code & HAL_UART_ERROR_PE) != 0U)
         {
             g_app_diag.rx_pe_count++;
         }
 
-        /* 清 ErrorCode，让下一次错误能被准确归类——HAL 默认在 UART_Receive_IT
-         * 错误处理里清一部分标志，但 ErrorCode 这个汇总字段我们手动清。*/
-        huart->ErrorCode = HAL_UART_ERROR_NONE;
-
-        App_RuntimeStartUart1Receive();
+        App_RuntimeRearmReceiveIfReady(
+            &huart1,
+            &g_app_runtime.uart1_rx_byte);
     }
     else if (huart->Instance == USART2)
     {
-        huart->ErrorCode = HAL_UART_ERROR_NONE;
-        (void)HAL_UART_Receive_IT(&huart2, &g_app_runtime.uart2_rx_byte, 1U);
+        App_RuntimeRearmReceiveIfReady(
+            &huart2,
+            &g_app_runtime.uart2_rx_byte);
     }
     else if (huart->Instance == USART3)
     {
-        huart->ErrorCode = HAL_UART_ERROR_NONE;
-        (void)HAL_UART_Receive_IT(&huart3, &g_app_runtime.uart3_rx_byte, 1U);
+        App_RuntimeRearmReceiveIfReady(
+            &huart3,
+            &g_app_runtime.uart3_rx_byte);
     }
 }
