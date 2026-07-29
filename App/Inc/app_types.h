@@ -22,6 +22,11 @@ typedef struct
     AppAnalogMeasure ntc3;
     uint32_t sample_tick;
     uint32_t sample_counter;
+    /* DRV8874 IPROPI 电流 (来自 motor 状态)：
+     *   0.1 A 分辨率，上限钳在 29 (= 2.9 A)，ADC 物理满量程 (≈2.93 A) 已在
+     *   sensor_task 里换算时限制；
+     *   电机不在 FWD/REV 时一律报告 0（不显示上次残值）。*/
+    uint32_t motor_current_a_deci;
 } AppSensorSnapshot;
 
 typedef struct
@@ -38,6 +43,7 @@ typedef struct
     bool nmos1_enabled;
     bool nmos2_enabled;
     bool uvlo_enabled;
+    bool mp4317_enabled;
 } AppIoStatus;
 
 typedef struct
@@ -54,13 +60,28 @@ typedef enum
 {
     APP_OUTPUT_TARGET_NMOS1 = 0,
     APP_OUTPUT_TARGET_NMOS2,
-    APP_OUTPUT_TARGET_UVLO
+    APP_OUTPUT_TARGET_UVLO,
+    APP_OUTPUT_TARGET_MP4317
 } AppOutputTarget;
+
+typedef enum
+{
+    APP_OUTPUT_REQUEST_SET_TARGET = 0,
+    APP_OUTPUT_REQUEST_SET_POWER_MODE
+} AppOutputRequestType;
 
 typedef struct
 {
-    AppOutputTarget target;
-    bool enabled;
+    AppOutputRequestType type;
+    union
+    {
+        struct
+        {
+            AppOutputTarget target;
+            bool enabled;
+        } target;
+        AppPowerMode power_mode;
+    } data;
 } AppOutputRequest;
 
 #endif

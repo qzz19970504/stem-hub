@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "cmsis_os.h"
 #include "task.h"
@@ -42,6 +43,53 @@ static void App_AtForwardLine(const char *line)
     if (uart3_enabled)
     {
         App_RuntimeSendText(&huart3, line);
+    }
+}
+
+static void App_AtSendUartPayload(const AppAtUartPayloadCommand *payload)
+{
+    bool uart2_enabled = false;
+    bool uart3_enabled = false;
+    HAL_StatusTypeDef uart2_status = HAL_OK;
+    HAL_StatusTypeDef uart3_status = HAL_OK;
+
+    if ((payload == NULL) || (payload->length == 0U))
+    {
+        App_RuntimeSendError("HEX");
+        return;
+    }
+
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    if (!uart2_enabled && !uart3_enabled)
+    {
+        App_RuntimeSendError("UART_DISABLED");
+        return;
+    }
+
+    if (uart2_enabled)
+    {
+        uart2_status = App_RuntimeSendBytes(
+            &huart2,
+            payload->bytes,
+            (uint16_t)payload->length,
+            APP_UART_TX_TIMEOUT_MS);
+    }
+    if (uart3_enabled)
+    {
+        uart3_status = App_RuntimeSendBytes(
+            &huart3,
+            payload->bytes,
+            (uint16_t)payload->length,
+            APP_UART_TX_TIMEOUT_MS);
+    }
+
+    if ((uart2_status == HAL_OK) && (uart3_status == HAL_OK))
+    {
+        App_RuntimeSendOk();
+    }
+    else
+    {
+        App_RuntimeSendError("UART_TX");
     }
 }
 
@@ -119,13 +167,15 @@ static void App_AtReplySense(void)
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,TICK=%lu,COUNT=%lu,STK_AT=%lu,STK_SENSOR=%lu,STK_MOTOR=%lu,TX_SP=%lu,TX_LS=%lu\r\nOK\r\n",
+                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,MOTOR_I=%lu.%luA,TICK=%lu,COUNT=%lu,STK_AT=%lu,STK_SENSOR=%lu,STK_MOTOR=%lu,TX_SP=%lu,TX_LS=%lu\r\nOK\r\n",
                    batt_ntc_str,
                    batt_v_int,
                    batt_v_dec,
                    ntc1_str,
                    ntc2_str,
                    ntc3_str,
+                   (unsigned long)(snapshot.motor_current_a_deci / 10UL),
+                   (unsigned long)(snapshot.motor_current_a_deci % 10UL),
                    (unsigned long)snapshot.sample_tick,
                    (unsigned long)snapshot.sample_counter,
                    (unsigned long)stk_at,
@@ -179,16 +229,29 @@ static void App_AtReplyMotor(void)
  * 最终实机证据 (CFSR=0x00020000, HFSR=0x40000000) 证明根因是 atTask 栈溢出
  * 导致 MLSPERR + FORCED HardFault，与 HAL_BUSY 无关。这些字段保留为被动观测，
  * 不参与任何自动恢复或 watchdog 行为。详见 docs/at-rx-stall-debug-report.md。 */
+/* 握手 / 版本查询：返回 APP_FIRMWARE_VERSION（app_config.h 里改一行）。
+ * 上位机连上 UART1 后发 AT+VERSION?，收到回包即确认固件可解析且能应答。*/
+static void App_AtReplyVersion(void)
+{
+    char buffer[64];
+
+    (void)snprintf(buffer,
+                   sizeof(buffer),
+                   "+VERSION:%s\r\nOK\r\n",
+                   APP_FIRMWARE_VERSION);
+    App_RuntimeSendText(&huart1, buffer);
+}
+
 static void App_AtReplyDiag(void)
 {
-    char buffer[512];
+    char buffer[640];
     AppRuntimeDiag diag;
 
     App_RuntimeGetDiag(&diag);
 
     (void)snprintf(buffer,
                    sizeof(buffer),
-                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,TX_BUSY=%lu,TX_STATE_PRE=%lu,TX_STATE_POST=%lu,TX_ERR_PRE=%lu,TX_ERR_POST=%lu,TX_LAST_STATUS=%lu,SENSOR_LOOP=%lu,SENSOR_PUBLISH=%lu,SENSOR_LAST_PUBLISH_TICK=%lu,SENSOR_ADC1_READ_FAIL=%lu,SENSOR_ADC2_READ_FAIL=%lu\r\n",
+                   "+DIAG:RX_ISR=%lu,RX_BYTE=%lu,RX_OVERFLOW=%lu,RX_ERR=%lu,ORE=%lu,NE=%lu,FE=%lu,PE=%lu,LINE_TOO_LONG=%lu,AT_LOOP=%lu,TX_CALL=%lu,TX_OK=%lu,TX_TIMEOUT=%lu,TX_ERR=%lu,TX_BUSY=%lu,TX_STATE_PRE=%lu,TX_STATE_POST=%lu,TX_ERR_PRE=%lu,TX_ERR_POST=%lu,TX_LAST_STATUS=%lu,SENSOR_LOOP=%lu,SENSOR_PUBLISH=%lu,SENSOR_LAST_PUBLISH_TICK=%lu,SENSOR_ADC1_READ_FAIL=%lu,SENSOR_ADC2_READ_FAIL=%lu,UART2_RX_BYTE=%lu,UART2_RX_OVERFLOW=%lu,UART3_RX_BYTE=%lu,UART3_RX_OVERFLOW=%lu\r\n",
                    (unsigned long)diag.rx_isr_count,
                    (unsigned long)diag.rx_byte_count,
                    (unsigned long)diag.rx_overflow_count,
@@ -213,7 +276,11 @@ static void App_AtReplyDiag(void)
                    (unsigned long)diag.sensor_publish_count,
                    (unsigned long)diag.sensor_last_publish_tick,
                    (unsigned long)diag.sensor_adc1_read_fail_count,
-                   (unsigned long)diag.sensor_adc2_read_fail_count);
+                   (unsigned long)diag.sensor_adc2_read_fail_count,
+                   (unsigned long)diag.uart2_rx_byte_count,
+                   (unsigned long)diag.uart2_rx_overflow_count,
+                   (unsigned long)diag.uart3_rx_byte_count,
+                   (unsigned long)diag.uart3_rx_overflow_count);
     App_RuntimeSendText(&huart1, buffer);
     App_RuntimeSendOk();
 }
@@ -232,6 +299,19 @@ static void App_AtHandleCommand(const AppAtCommand *command)
     {
     case APP_AT_COMMAND_SET_BRIDGE:
         App_StateSetBridgeEnabled(command->data.bridge.target, command->data.bridge.enabled);
+        if (!command->data.bridge.enabled)
+        {
+            if ((command->data.bridge.target == APP_BRIDGE_TARGET_UART2)
+                || (command->data.bridge.target == APP_BRIDGE_TARGET_UART23))
+            {
+                App_RuntimeFlushBridgeRx(2U);
+            }
+            if ((command->data.bridge.target == APP_BRIDGE_TARGET_UART3)
+                || (command->data.bridge.target == APP_BRIDGE_TARGET_UART23))
+            {
+                App_RuntimeFlushBridgeRx(3U);
+            }
+        }
         App_RuntimeSendOk();
         break;
     case APP_AT_COMMAND_SET_LED_MASTER:
@@ -250,9 +330,12 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS2, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
-    case APP_AT_COMMAND_SET_EN_UVLO:
-        queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_UVLO, command->data.output.enabled);
+    case APP_AT_COMMAND_SET_POWER_MODE:
+        queued = App_OutputEnqueuePowerMode(command->data.power.mode);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
+        break;
+    case APP_AT_COMMAND_SEND_UART:
+        App_AtSendUartPayload(&command->data.uart_payload);
         break;
     case APP_AT_COMMAND_QUERY_SENSE:
         App_AtReplySense();
@@ -266,6 +349,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
     case APP_AT_COMMAND_QUERY_DIAG:
         App_AtReplyDiag();
         break;
+    case APP_AT_COMMAND_QUERY_VERSION:
+        App_AtReplyVersion();
+        break;
     default:
         App_RuntimeSendError("UNSUPPORTED");
         break;
@@ -278,6 +364,19 @@ static void App_AtProcessLine(const char *line)
 
     if ((line == NULL) || (line[0] == '\0'))
     {
+        return;
+    }
+
+    if (strncmp(line, "AT+UARTTX=", 10U) == 0)
+    {
+        if (AppAtProtocol_Parse(line, &command))
+        {
+            App_AtHandleCommand(&command);
+        }
+        else
+        {
+            App_RuntimeSendError("HEX");
+        }
         return;
     }
 

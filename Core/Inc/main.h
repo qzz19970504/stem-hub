@@ -67,8 +67,8 @@ void Error_Handler(void);
 #define nSLEEP_GPIO_Port GPIOB
 #define nFAULT_Pin GPIO_PIN_15
 #define nFAULT_GPIO_Port GPIOB
-#define LED2_Pin GPIO_PIN_8
-#define LED2_GPIO_Port GPIOA
+#define MP4317_Pin GPIO_PIN_8
+#define MP4317_GPIO_Port GPIOA
 #define NMOS1_Pin GPIO_PIN_12
 #define NMOS1_GPIO_Port GPIOA
 #define LED3_Pin GPIO_PIN_15

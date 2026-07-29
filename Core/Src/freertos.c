@@ -95,6 +95,13 @@ const osThreadAttr_t nmosTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+/* Definitions for bridgeTask */
+osThreadId_t bridgeTaskHandle;
+const osThreadAttr_t bridgeTask_attributes = {
+  .name = "bridgeTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -160,6 +167,8 @@ void MX_FREERTOS_Init(void) {
   App_FailFastIfThreadCreateFailed(ledTaskHandle);
   nmosTaskHandle = osThreadNew(App_NmosTask, NULL, &nmosTask_attributes);
   App_FailFastIfThreadCreateFailed(nmosTaskHandle);
+  bridgeTaskHandle = osThreadNew(App_BridgeTask, NULL, &bridgeTask_attributes);
+  App_FailFastIfThreadCreateFailed(bridgeTaskHandle);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

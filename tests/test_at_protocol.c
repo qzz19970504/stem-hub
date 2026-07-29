@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "app_at_protocol.h"
@@ -24,9 +25,37 @@ static void expect_query_command(const char *line, AppAtCommandType expected_typ
     assert(command.type == expected_type);
 }
 
+static void expect_power_command(const char *line, AppPowerMode expected_mode)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SET_POWER_MODE);
+    assert(command.data.power.mode == expected_mode);
+}
+
+static void expect_uart_payload(const char *line,
+                                const uint8_t *expected_payload,
+                                size_t expected_length)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SEND_UART);
+    assert(command.data.uart_payload.length == expected_length);
+    assert(memcmp(command.data.uart_payload.bytes, expected_payload, expected_length) == 0);
+}
+
 int main(void)
 {
     AppAtCommand command = {0};
+    static const uint8_t binary_payload[] = {0x00U, 0xFFU, 0x10U};
+    static const uint8_t maximum_payload[32] = {
+        0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U,
+        0x08U, 0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU,
+        0x10U, 0x11U, 0x12U, 0x13U, 0x14U, 0x15U, 0x16U, 0x17U,
+        0x18U, 0x19U, 0x1AU, 0x1BU, 0x1CU, 0x1DU, 0x1EU, 0x1FU
+    };
 
     expect_bridge_command("AT+UART2=ON\r\n", APP_BRIDGE_TARGET_UART2, true);
     expect_bridge_command("AT+UART3=OFF\r\n", APP_BRIDGE_TARGET_UART3, false);
@@ -44,14 +73,36 @@ int main(void)
     assert(command.type == APP_AT_COMMAND_SET_NMOS1);
     assert(command.data.output.enabled == true);
 
-    assert(AppAtProtocol_Parse("AT+UVLO=OFF\r\n", &command));
-    assert(command.type == APP_AT_COMMAND_SET_EN_UVLO);
-    assert(command.data.output.enabled == false);
+    expect_power_command("AT+CHARGE=ON\r\n", APP_POWER_MODE_CHARGE);
+    expect_power_command("AT+CHARGE=OFF\r\n", APP_POWER_MODE_OFF);
+    expect_power_command("AT+DRIVE=ON\r\n", APP_POWER_MODE_DRIVE);
+    expect_power_command("AT+DRIVE=OFF\r\n", APP_POWER_MODE_OFF);
+    expect_power_command("AT+POWER=OFF\r\n", APP_POWER_MODE_OFF);
+
+    assert(!AppAtProtocol_Parse("AT+LM51770=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MP4317=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MP4317=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+POWER=ON\r\n", &command));
 
     expect_query_command("AT+SENSE?\r\n", APP_AT_COMMAND_QUERY_SENSE);
     expect_query_command("AT+FAULT?\r\n", APP_AT_COMMAND_QUERY_FAULT);
     expect_query_command("AT+MOTOR?\r\n", APP_AT_COMMAND_QUERY_MOTOR);
     expect_query_command("AT+DIAG?\r\n", APP_AT_COMMAND_QUERY_DIAG);
+    expect_query_command("AT+VERSION?\r\n", APP_AT_COMMAND_QUERY_VERSION);
+
+    expect_uart_payload("AT+UARTTX=00FF10\r\n", binary_payload, sizeof(binary_payload));
+    expect_uart_payload(
+        "AT+UARTTX=000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F\r\n",
+        maximum_payload,
+        sizeof(maximum_payload));
+    assert(!AppAtProtocol_Parse("AT+UARTTX=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UARTTX=0\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UARTTX=00ff\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UARTTX=00-G\r\n", &command));
+    assert(!AppAtProtocol_Parse(
+        "AT+UARTTX=000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20\r\n",
+        &command));
 
     assert(AppAtProtocol_IsAtCommand("AT+LED=ON\r\n"));
     assert(!AppAtProtocol_IsAtCommand("payload-data"));

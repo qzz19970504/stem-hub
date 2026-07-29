@@ -4,6 +4,8 @@
 > **硬件/软件**：STM32F103C8T6、FreeRTOS V10.3.1、CMSIS-RTOS2、HAL
 > **更新日期**：2026-07-17
 > **状态**：根因已定位、修复已落地、用户实测 30 分钟稳定。**不再视为"未解之谜"**。
+>
+> **v2.2 追记（2026-07-26）**：本报告主体保留当时的故障证据和修复结论；当前双向 UART 隧道对发送路径、任务和诊断字段的后续变化见 §10。
 
 ---
 
@@ -38,7 +40,7 @@
 
 ## 3. 现行 `AT+DIAG?` 字段语义
 
-`AT+DIAG?` 是被动观测字段，不参与任何自动恢复。字段如下（与代码 [app_at_task.c:173-213](App/Src/app_at_task.c#L173-L213)、[app_runtime.h:13-62](App/Inc/app_runtime.h#L13-L62) 一致）：
+`AT+DIAG?` 是被动观测字段，不参与任何自动恢复。字段如下（与代码 [app_at_task.c](../App/Src/app_at_task.c)、[app_runtime.h](../App/Inc/app_runtime.h) 一致）：
 
 | 字段组 | 字段 | 含义 |
 |---|---|---|
@@ -54,7 +56,7 @@
 
 ## 4. 故障现场记录 `+FAIL:H=`
 
-为在"固件已死"状态下仍能从串口取证，在 `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` / `Error_Handler` / RTOS 对象 fail-fast 路径里调用 [`App_RecordFailureAndPrint`](Core/Src/main.c)（详见头文件声明 [app_runtime.h](App/Inc/app_runtime.h)）。
+为在"固件已死"状态下仍能从串口取证，在 `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` / `Error_Handler` / RTOS 对象 fail-fast 路径里调用 [`App_RecordFailureAndPrint`](../Core/Src/main.c)（详见头文件声明 [app_runtime.h](../App/Inc/app_runtime.h)）。
 
 输出格式：`+FAIL:H=<hint32> <gState32> <errCode32> <CFSR32> <HFSR32> <LR32>\r\n`
 
@@ -116,13 +118,13 @@ docs(debug): finalize at-rx-stall-debug-report                (本分支新增)
 
 | 文件 | 改动 |
 |---|---|
-| [Core/Src/freertos.c](Core/Src/freertos.c) | `atTask_attributes.stack_size` 从 `256 * 4` → `512 * 4`（1024 → 2048 B） |
-| [Core/Inc/FreeRTOSConfig.h](Core/Inc/FreeRTOSConfig.h) | `configTOTAL_HEAP_SIZE` 从 `8192` → `12288` |
-| [App/Inc/app_runtime.h](App/Inc/app_runtime.h) | 新增 `tx_busy_count`、`tx_state_pre/post`、`tx_err_pre/post`、`tx_last_status` 字段；声明 `App_RecordFailureAndPrint` |
-| [App/Src/app_runtime.c](App/Src/app_runtime.c) | `App_RuntimeSendText` 前后记录 HAL 状态机快照；`App_RuntimeFailFastIfNull` 与 `App_RuntimeStartUart1Receive` 在失败分支先调用 `App_RecordFailureAndPrint` 再 `Error_Handler` |
-| [Core/Src/main.c](Core/Src/main.c) | 新增 `g_fail_record[8]` 与 `App_RecordFailureAndPrint`：在 `__disable_irq` 之前用 `USART1->SR` polling 把一行 ASCII 短帧写到物理线上 |
-| [Core/Src/stm32f1xx_it.c](Core/Src/stm32f1xx_it.c) | `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` 入口都先调 `App_RecordFailureAndPrint` 再 `while(1)` |
-| [App/Src/app_at_task.c](App/Src/app_at_task.c) | `App_AtReplySense` 行尾追加 `STK_AT/STK_SENSOR/STK_MOTOR/TX_SP/TX_LS` 字段；`App_AtReplyDiag` 新增 `TX_BUSY/TX_STATE_*/TX_ERR_*/TX_LAST_STATUS` 字段 |
+| [Core/Src/freertos.c](../Core/Src/freertos.c) | `atTask_attributes.stack_size` 从 `256 * 4` → `512 * 4`（1024 → 2048 B） |
+| [Core/Inc/FreeRTOSConfig.h](../Core/Inc/FreeRTOSConfig.h) | `configTOTAL_HEAP_SIZE` 从 `8192` → `12288` |
+| [App/Inc/app_runtime.h](../App/Inc/app_runtime.h) | 新增 `tx_busy_count`、`tx_state_pre/post`、`tx_err_pre/post`、`tx_last_status` 字段；声明 `App_RecordFailureAndPrint` |
+| [App/Src/app_runtime.c](../App/Src/app_runtime.c) | `App_RuntimeSendText` 前后记录 HAL 状态机快照；`App_RuntimeFailFastIfNull` 与 `App_RuntimeStartUart1Receive` 在失败分支先调用 `App_RecordFailureAndPrint` 再 `Error_Handler` |
+| [Core/Src/main.c](../Core/Src/main.c) | 新增 `g_fail_record[8]` 与 `App_RecordFailureAndPrint`：在 `__disable_irq` 之前用 `USART1->SR` polling 把一行 ASCII 短帧写到物理线上 |
+| [Core/Src/stm32f1xx_it.c](../Core/Src/stm32f1xx_it.c) | `HardFault_Handler` / `MemManage_Handler` / `BusFault_Handler` / `UsageFault_Handler` 入口都先调 `App_RecordFailureAndPrint` 再 `while(1)` |
+| [App/Src/app_at_task.c](../App/Src/app_at_task.c) | `App_AtReplySense` 行尾追加 `STK_AT/STK_SENSOR/STK_MOTOR/TX_SP/TX_LS` 字段；`App_AtReplyDiag` 新增 `TX_BUSY/TX_STATE_*/TX_ERR_*/TX_LAST_STATUS` 字段 |
 
 ### 6.2 资源占用
 
@@ -171,6 +173,41 @@ atTask 多用 1024 B（栈）+ heap 多用 4096 B，总 RAM 仍在 20 KB 内（�
 ## 9. 引用
 
 - 看门狗 API（已废弃）：[`app_runtime.h`](../App/Inc/app_runtime.h)
-- HAL 状态码参考：[STM32F1 HAL UART Driver 文档](Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h)
+- HAL 状态码参考：[STM32F1 HAL UART Driver 文档](../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h)
 - Cortex-M3 CFSR/HFSR：[ARMv7-M Architecture Reference Manual §B3.4 / §B3.6]
 - 系统设计背景：[README.md](../README.md)
+
+---
+
+## 10. v2.2 双向 UART 隧道后的现状
+
+v2.2 没有推翻本报告关于 MLSPERR/栈溢出的根因和 `atTask` 2048 B 栈修复。它在该稳定基线上继续调整了 UART 数据路径：
+
+| 项目 | v2.2 当前实现 |
+|---|---|
+| 上位机到下游 | `AT+UARTTX=<HEX>`，每帧 1～32 字节，向所有已启用目标发送精确原始字节 |
+| 下游到上位机 | UART2/UART3 中断只入独立环形缓冲，由 `bridgeTask` 发送 `+UART2RX:<HEX>` / `+UART3RX:<HEX>` |
+| UART1 发送串行化 | `App_RuntimeSendText` 现在封装 `App_RuntimeSendBytes`；任务态 UART 发送通过 `uart_tx_mutex` 串行化，防止 AT 回包与异步事件交错 |
+| 桥接任务栈 | 新增 `bridgeTask`，栈大小 1024 B，优先级 `osPriorityNormal` |
+| 接收缓冲 | UART2、UART3 各 256 字节环形缓冲；关闭对应桥接时清空未上报数据 |
+| 诊断扩展 | 新增 `UART2_RX_BYTE`、`UART2_RX_OVERFLOW`、`UART3_RX_BYTE`、`UART3_RX_OVERFLOW` |
+| 看门狗状态 | 仍未恢复 UART 静默/超时看门狗；当前协议没有 `UART_WDG` 字段 |
+
+`TX_CALL/TX_OK/TX_TIMEOUT/TX_ERR/TX_BUSY` 在 v2.2 中统计 `App_RuntimeSendBytes` 路径，因此覆盖 AT 文本回包、UART 异步事件和下游二进制发送，不再只代表 `App_RuntimeSendText`。
+
+v2.2 Debug 构建结果：
+
+```text
+Memory region         Used Size  Region Size  %age Used
+             RAM:       19176 B        20 KB     93.63%
+           FLASH:       50376 B        64 KB     76.87%
+```
+
+RAM 余量比本报告 §6.2 记录的版本更小，后续增加任务栈、队列或静态缓冲时应重新检查链接器内存报告和各任务高水位。
+
+相关实现：
+
+- [`app_runtime.c`](../App/Src/app_runtime.c)：USART1/2/3 接收回调、环形缓冲、发送互斥和诊断计数
+- [`app_bridge_task.c`](../App/Src/app_bridge_task.c)：下游接收事件的任务态封装
+- [`app_uart_tunnel.c`](../App/Src/app_uart_tunnel.c)：大写十六进制事件编码
+- [`上位机AT命令文档.md`](../上位机AT命令文档.md)：v2.2 对外协议

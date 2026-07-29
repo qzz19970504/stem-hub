@@ -31,11 +31,15 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_runtime.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_protocol.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_adc_filter.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_uart_tunnel.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_bridge_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_sensor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_led_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_output_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_power_path.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_ntc_table.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_batt_ntc_table.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/stm32f1xx_it.c

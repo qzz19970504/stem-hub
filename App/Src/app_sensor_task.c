@@ -4,11 +4,29 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "app_adc_filter.h"
 #include "app_batt_ntc_table.h"
 #include "app_config.h"
+#include "app_motor.h"
 #include "app_ntc_table.h"
 #include "app_runtime.h"
 #include "app_state.h"
+
+typedef enum
+{
+    APP_SENSOR_FILTER_BATTERY_NTC = 0,
+    APP_SENSOR_FILTER_BATTERY_VOLTAGE,
+    APP_SENSOR_FILTER_NTC1,
+    APP_SENSOR_FILTER_NTC2,
+    APP_SENSOR_FILTER_NTC3
+} AppSensorFilterIndex;
+
+static AppAdcRollingMean
+    g_sensor_filters[APP_ADC_ROLLING_CHANNEL_COUNT];
+static uint16_t
+    g_sensor_cycle_samples[APP_ADC_ROLLING_CHANNEL_COUNT];
+static uint16_t
+    g_sensor_cycle_means[APP_ADC_ROLLING_CHANNEL_COUNT];
 
 /* 电池 NTC 温度换算 (查表法):
  *  1) 拓扑 3V3 -- NTC -- Vadc -- 470Ω -- GND，先由 Vadc 反推 Rntc
@@ -179,11 +197,11 @@ static int32_t App_SensorConvertNtcTemperature(uint32_t millivolts)
 }
 
 static void App_SensorUpdateMeasure(AppAnalogMeasure *measure,
-                                    uint16_t raw,
+                                    uint16_t filtered_raw,
                                     int32_t (*convert_fn)(uint32_t))
 {
-    measure->raw = raw;
-    measure->millivolts = App_RuntimeRawToMillivolts(raw);
+    measure->raw = filtered_raw;
+    measure->millivolts = App_RuntimeRawToMillivolts(filtered_raw);
     measure->physical_value = convert_fn(measure->millivolts);
 }
 
@@ -207,7 +225,7 @@ void App_SensorTask(void *argument)
         success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw);
         if (success)
         {
-            App_SensorUpdateMeasure(&next_snapshot.battery_ntc, raw, App_SensorConvertBatteryNtc);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_NTC] = raw;
         }
         else
         {
@@ -219,7 +237,7 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_5, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.battery_voltage, raw, App_SensorConvertBatteryVoltage);
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_VOLTAGE] = raw;
             }
             else
             {
@@ -232,7 +250,7 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc3, raw, App_SensorConvertNtcTemperature);
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3] = raw;
             }
             else
             {
@@ -245,7 +263,7 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc2, raw, App_SensorConvertNtcTemperature);
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2] = raw;
             }
             else
             {
@@ -258,7 +276,7 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc1, raw, App_SensorConvertNtcTemperature);
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1] = raw;
             }
             else
             {
@@ -268,6 +286,54 @@ void App_SensorTask(void *argument)
 
         if (success)
         {
+            success = App_AdcRollingMeanPushCycle(
+                g_sensor_filters,
+                g_sensor_cycle_samples,
+                APP_ADC_ROLLING_CHANNEL_COUNT,
+                g_sensor_cycle_means);
+        }
+
+        if (success)
+        {
+            App_SensorUpdateMeasure(
+                &next_snapshot.battery_ntc,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_NTC],
+                App_SensorConvertBatteryNtc);
+            App_SensorUpdateMeasure(
+                &next_snapshot.battery_voltage,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
+                App_SensorConvertBatteryVoltage);
+            App_SensorUpdateMeasure(
+                &next_snapshot.ntc1,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1],
+                App_SensorConvertNtcTemperature);
+            App_SensorUpdateMeasure(
+                &next_snapshot.ntc2,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2],
+                App_SensorConvertNtcTemperature);
+            App_SensorUpdateMeasure(
+                &next_snapshot.ntc3,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3],
+                App_SensorConvertNtcTemperature);
+
+            /* DRV8874 IPROPI 电流快照：仅当电机在 FWD/REV 时取 mA→dA 转换；
+             * 其他模式 (SLEEP/WAKE/BRAKE/STOP/UNKNOWN) 一律写 0，
+             * 避免"电机已停但 SENSE 仍报残留电流"的误读。ADC 物理满量程 ≈2.93 A，
+             * 这里再钳一道到 29 dA 防万一读到的是过流瞬间的残值。*/
+            AppMotorStatus motor;
+            uint32_t motor_deci = 0U;
+            if (App_MotorTryGetStatus(&motor)
+                && ((motor.mode == APP_MOTOR_MODE_FORWARD)
+                    || (motor.mode == APP_MOTOR_MODE_REVERSE)))
+            {
+                motor_deci = (motor.current_ma + 50U) / 100U;
+                if (motor_deci > 29U)
+                {
+                    motor_deci = 29U;
+                }
+            }
+            next_snapshot.motor_current_a_deci = motor_deci;
+
             uint32_t tick = (uint32_t)osKernelGetTickCount();
             App_StatePublishSensorSnapshot(&next_snapshot, tick);
             App_RuntimeNoteSensorPublish(tick);

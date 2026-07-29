@@ -23,6 +23,7 @@ static AppState g_app_state = {
         .nmos1_enabled = false,
         .nmos2_enabled = false,
         .uvlo_enabled = false,
+        .mp4317_enabled = false,
     },
     .bridge_uart2_enabled = false,
     .bridge_uart3_enabled = false,
@@ -186,6 +187,9 @@ void App_StateSetOutputEnabled(AppOutputTarget target, bool enabled)
         break;
     case APP_OUTPUT_TARGET_UVLO:
         g_app_state.io_status.uvlo_enabled = enabled;
+        break;
+    case APP_OUTPUT_TARGET_MP4317:
+        g_app_state.io_status.mp4317_enabled = enabled;
         break;
     default:
         break;
