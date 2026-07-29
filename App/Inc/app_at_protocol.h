@@ -26,14 +26,20 @@ typedef enum
 
 typedef enum
 {
+    APP_POWER_MODE_OFF = 0,
+    APP_POWER_MODE_CHARGE,
+    APP_POWER_MODE_DRIVE
+} AppPowerMode;
+
+typedef enum
+{
     APP_AT_COMMAND_NONE = 0,
     APP_AT_COMMAND_SET_BRIDGE,
     APP_AT_COMMAND_SET_LED_MASTER,
     APP_AT_COMMAND_SET_MOTOR_MODE,
     APP_AT_COMMAND_SET_NMOS1,
     APP_AT_COMMAND_SET_NMOS2,
-    APP_AT_COMMAND_SET_LM51770,
-    APP_AT_COMMAND_SET_MP4317,
+    APP_AT_COMMAND_SET_POWER_MODE,
     APP_AT_COMMAND_SEND_UART,
     APP_AT_COMMAND_QUERY_SENSE,
     APP_AT_COMMAND_QUERY_FAULT,
@@ -60,6 +66,11 @@ typedef struct
 
 typedef struct
 {
+    AppPowerMode mode;
+} AppAtPowerCommand;
+
+typedef struct
+{
     uint8_t bytes[APP_UART_TUNNEL_CHUNK_SIZE];
     size_t length;
 } AppAtUartPayloadCommand;
@@ -73,6 +84,7 @@ typedef struct
         AppAtBooleanCommand led;
         AppAtBooleanCommand output;
         AppAtMotorCommand motor;
+        AppAtPowerCommand power;
         AppAtUartPayloadCommand uart_payload;
     } data;
 } AppAtCommand;

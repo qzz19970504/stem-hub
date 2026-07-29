@@ -4,12 +4,19 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "app_adc_filter.h"
 #include "app_batt_ntc_table.h"
 #include "app_config.h"
 #include "app_motor.h"
 #include "app_ntc_table.h"
 #include "app_runtime.h"
 #include "app_state.h"
+
+static AppAdcRollingMean g_battery_ntc_filter;
+static AppAdcRollingMean g_battery_voltage_filter;
+static AppAdcRollingMean g_ntc1_filter;
+static AppAdcRollingMean g_ntc2_filter;
+static AppAdcRollingMean g_ntc3_filter;
 
 /* 电池 NTC 温度换算 (查表法):
  *  1) 拓扑 3V3 -- NTC -- Vadc -- 470Ω -- GND，先由 Vadc 反推 Rntc
@@ -180,11 +187,14 @@ static int32_t App_SensorConvertNtcTemperature(uint32_t millivolts)
 }
 
 static void App_SensorUpdateMeasure(AppAnalogMeasure *measure,
+                                    AppAdcRollingMean *filter,
                                     uint16_t raw,
                                     int32_t (*convert_fn)(uint32_t))
 {
-    measure->raw = raw;
-    measure->millivolts = App_RuntimeRawToMillivolts(raw);
+    uint16_t filtered_raw = App_AdcRollingMeanPush(filter, raw);
+
+    measure->raw = filtered_raw;
+    measure->millivolts = App_RuntimeRawToMillivolts(filtered_raw);
     measure->physical_value = convert_fn(measure->millivolts);
 }
 
@@ -208,7 +218,10 @@ void App_SensorTask(void *argument)
         success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw);
         if (success)
         {
-            App_SensorUpdateMeasure(&next_snapshot.battery_ntc, raw, App_SensorConvertBatteryNtc);
+            App_SensorUpdateMeasure(&next_snapshot.battery_ntc,
+                                    &g_battery_ntc_filter,
+                                    raw,
+                                    App_SensorConvertBatteryNtc);
         }
         else
         {
@@ -220,7 +233,10 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_5, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.battery_voltage, raw, App_SensorConvertBatteryVoltage);
+                App_SensorUpdateMeasure(&next_snapshot.battery_voltage,
+                                        &g_battery_voltage_filter,
+                                        raw,
+                                        App_SensorConvertBatteryVoltage);
             }
             else
             {
@@ -233,7 +249,10 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc3, raw, App_SensorConvertNtcTemperature);
+                App_SensorUpdateMeasure(&next_snapshot.ntc3,
+                                        &g_ntc3_filter,
+                                        raw,
+                                        App_SensorConvertNtcTemperature);
             }
             else
             {
@@ -246,7 +265,10 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc2, raw, App_SensorConvertNtcTemperature);
+                App_SensorUpdateMeasure(&next_snapshot.ntc2,
+                                        &g_ntc2_filter,
+                                        raw,
+                                        App_SensorConvertNtcTemperature);
             }
             else
             {
@@ -259,7 +281,10 @@ void App_SensorTask(void *argument)
             success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw);
             if (success)
             {
-                App_SensorUpdateMeasure(&next_snapshot.ntc1, raw, App_SensorConvertNtcTemperature);
+                App_SensorUpdateMeasure(&next_snapshot.ntc1,
+                                        &g_ntc1_filter,
+                                        raw,
+                                        App_SensorConvertNtcTemperature);
             }
             else
             {

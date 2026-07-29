@@ -316,19 +316,26 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+LM51770=", command_body, &value)
+    if (AppAtProtocol_MatchAssignment("AT+CHARGE=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
-        out_command->type = APP_AT_COMMAND_SET_LM51770;
-        out_command->data.output.enabled = enabled;
+        out_command->type = APP_AT_COMMAND_SET_POWER_MODE;
+        out_command->data.power.mode = enabled ? APP_POWER_MODE_CHARGE : APP_POWER_MODE_OFF;
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+MP4317=", command_body, &value)
+    if (AppAtProtocol_MatchAssignment("AT+DRIVE=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
-        out_command->type = APP_AT_COMMAND_SET_MP4317;
-        out_command->data.output.enabled = enabled;
+        out_command->type = APP_AT_COMMAND_SET_POWER_MODE;
+        out_command->data.power.mode = enabled ? APP_POWER_MODE_DRIVE : APP_POWER_MODE_OFF;
+        return true;
+    }
+
+    if (strcmp(command_body, "AT+POWER=OFF") == 0)
+    {
+        out_command->type = APP_AT_COMMAND_SET_POWER_MODE;
+        out_command->data.power.mode = APP_POWER_MODE_OFF;
         return true;
     }
 

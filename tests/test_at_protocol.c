@@ -25,6 +25,15 @@ static void expect_query_command(const char *line, AppAtCommandType expected_typ
     assert(command.type == expected_type);
 }
 
+static void expect_power_command(const char *line, AppPowerMode expected_mode)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SET_POWER_MODE);
+    assert(command.data.power.mode == expected_mode);
+}
+
 static void expect_uart_payload(const char *line,
                                 const uint8_t *expected_payload,
                                 size_t expected_length)
@@ -64,9 +73,17 @@ int main(void)
     assert(command.type == APP_AT_COMMAND_SET_NMOS1);
     assert(command.data.output.enabled == true);
 
-    assert(AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));
-    assert(command.type == APP_AT_COMMAND_SET_LM51770);
-    assert(command.data.output.enabled == false);
+    expect_power_command("AT+CHARGE=ON\r\n", APP_POWER_MODE_CHARGE);
+    expect_power_command("AT+CHARGE=OFF\r\n", APP_POWER_MODE_OFF);
+    expect_power_command("AT+DRIVE=ON\r\n", APP_POWER_MODE_DRIVE);
+    expect_power_command("AT+DRIVE=OFF\r\n", APP_POWER_MODE_OFF);
+    expect_power_command("AT+POWER=OFF\r\n", APP_POWER_MODE_OFF);
+
+    assert(!AppAtProtocol_Parse("AT+LM51770=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MP4317=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MP4317=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+POWER=ON\r\n", &command));
 
     expect_query_command("AT+SENSE?\r\n", APP_AT_COMMAND_QUERY_SENSE);
     expect_query_command("AT+FAULT?\r\n", APP_AT_COMMAND_QUERY_FAULT);

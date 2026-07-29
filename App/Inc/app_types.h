@@ -64,10 +64,24 @@ typedef enum
     APP_OUTPUT_TARGET_MP4317
 } AppOutputTarget;
 
+typedef enum
+{
+    APP_OUTPUT_REQUEST_SET_TARGET = 0,
+    APP_OUTPUT_REQUEST_SET_POWER_MODE
+} AppOutputRequestType;
+
 typedef struct
 {
-    AppOutputTarget target;
-    bool enabled;
+    AppOutputRequestType type;
+    union
+    {
+        struct
+        {
+            AppOutputTarget target;
+            bool enabled;
+        } target;
+        AppPowerMode power_mode;
+    } data;
 } AppOutputRequest;
 
 #endif

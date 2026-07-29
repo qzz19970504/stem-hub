@@ -330,12 +330,8 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS2, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
-    case APP_AT_COMMAND_SET_LM51770:
-        queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_UVLO, command->data.output.enabled);
-        queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
-        break;
-    case APP_AT_COMMAND_SET_MP4317:
-        queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_MP4317, command->data.output.enabled);
+    case APP_AT_COMMAND_SET_POWER_MODE:
+        queued = App_OutputEnqueuePowerMode(command->data.power.mode);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
     case APP_AT_COMMAND_SEND_UART:
