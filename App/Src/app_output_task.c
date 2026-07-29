@@ -6,6 +6,11 @@
 
 bool App_OutputEnqueueState(AppOutputTarget target, bool enabled)
 {
+    if (!App_OutputTargetAllowsDirectControl(target))
+    {
+        return false;
+    }
+
     AppOutputRequest request = {
         .type = APP_OUTPUT_REQUEST_SET_TARGET,
         .data.target = {
@@ -81,7 +86,11 @@ void App_NmosTask(void *argument)
             continue;
         }
 
-        App_OutputApplyTarget(request.data.target.target,
-                              request.data.target.enabled);
+        if ((request.type == APP_OUTPUT_REQUEST_SET_TARGET)
+            && App_OutputTargetAllowsDirectControl(request.data.target.target))
+        {
+            App_OutputApplyTarget(request.data.target.target,
+                                  request.data.target.enabled);
+        }
     }
 }

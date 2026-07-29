@@ -9,6 +9,7 @@ typedef void (*AppPowerPathWrite)(AppOutputTarget target,
                                   bool enabled,
                                   void *context);
 
+bool App_OutputTargetAllowsDirectControl(AppOutputTarget target);
 bool App_PowerPathApply(AppPowerMode mode,
                         AppPowerPathWrite write,
                         void *context);

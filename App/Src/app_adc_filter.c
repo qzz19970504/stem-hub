@@ -18,3 +18,27 @@ uint16_t App_AdcRollingMeanPush(AppAdcRollingMean *filter, uint16_t sample)
 
     return (uint16_t)(filter->sum / filter->count);
 }
+
+bool App_AdcRollingMeanPushCycle(
+    AppAdcRollingMean *filters,
+    const uint16_t *samples,
+    size_t sample_count,
+    uint16_t *means)
+{
+    size_t index;
+
+    if ((filters == NULL)
+        || (samples == NULL)
+        || (means == NULL)
+        || (sample_count != APP_ADC_ROLLING_CHANNEL_COUNT))
+    {
+        return false;
+    }
+
+    for (index = 0U; index < APP_ADC_ROLLING_CHANNEL_COUNT; ++index)
+    {
+        means[index] = App_AdcRollingMeanPush(&filters[index], samples[index]);
+    }
+
+    return true;
+}

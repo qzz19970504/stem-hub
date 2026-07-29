@@ -2,7 +2,7 @@
 
 基于 STM32F103C8T6 和 FreeRTOS 的嵌入式控制项目，当前聚焦于多路 ADC 采集、DRV8874 电机驱动、UART AT 指令控制，以及 UART1 与 UART2/UART3 之间的可控双向二进制隧道。
 
-当前固件版本为 `release-v2.2`。v2.2 在 v2.1 的控制与采样能力上新增了二进制安全的双向 UART 隧道、UART2/UART3 接收诊断，以及自动生成 ELF/HEX/BIN 烧录产物的构建步骤。
+当前固件版本为 `release-v3.0`。v3.0 在 v2.2 的双向 UART 隧道基础上，将 LM51770 与 MP4317 收敛为 MCU 强制互斥的充电、驱动、全关三种状态，并对五路 1 Hz 传感 ADC 使用最近五个周期的滑动平均。
 
 ## 快速开始
 
@@ -198,20 +198,21 @@ at+led=on\r\n
 | AT+NMOS1=OFF | 关闭 NMOS1 |
 | AT+NMOS2=ON | 打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
-| AT+LM51770=ON | 拉低 EN/UVLO，LM51770 进入工作 |
-| AT+LM51770=OFF | 拉高 EN/UVLO，LM51770 关断（默认状态） |
-| AT+MP4317=ON | 拉低 PA8，MP4317 进入工作 |
-| AT+MP4317=OFF | 拉高 PA8，MP4317 关断（默认状态） |
+| AT+CHARGE=ON | 先关闭 LM51770 与 MP4317，再仅打开 LM51770 |
+| AT+CHARGE=OFF | 同时关闭 LM51770 与 MP4317 |
+| AT+DRIVE=ON | 先关闭 LM51770 与 MP4317，再仅打开 MP4317 |
+| AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
+| AT+POWER=OFF | 同时关闭 LM51770 与 MP4317 |
 
 #### 查询类
 
 | 指令 | 说明 | 回包示例 |
 | --- | --- | --- |
-| AT+SENSE? | 读取最近一次传感采样结果 | +SENSE:BATT_NTC=25.1C,BATT_V=37.0V,NTC1_C=25.3C,NTC2_C=25.2C,NTC3_C=25.4C,MOTOR_I=0.8A,TICK=4567,COUNT=8,STK_AT=512,STK_SENSOR=384,STK_MOTOR=420,TX_SP=0,TX_LS=0 |
+| AT+SENSE? | 读取最近传感快照；五路 1 Hz 传感 ADC 为最近五周期均值 | +SENSE:BATT_NTC=25.1C,BATT_V=37.0V,NTC1_C=25.3C,NTC2_C=25.2C,NTC3_C=25.4C,MOTOR_I=0.8A,TICK=4567,COUNT=8,STK_AT=512,STK_SENSOR=384,STK_MOTOR=420,TX_SP=0,TX_LS=0 |
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
-| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v2.2 |
+| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.0 |
 
 控制类命令成功时返回：
 
@@ -256,8 +257,8 @@ OK\r\n
 上位机连上 UART1 后，先发一次 `AT+VERSION?`，约定如下：
 
 - 成功回包：单行 `+VERSION:<version>` 后跟 `OK`。
-- 例：`+VERSION:release-v2.2\r\nOK\r\n`。
-- 拿到回包即确认固件可解析且能应答；版本号可用于后续命令集能力协商（例如旧版本可能不识别 `AT+LM51770=`）。
+- 例：`+VERSION:release-v3.0\r\nOK\r\n`。
+- 拿到回包即确认固件可解析且能应答；v3.0 使用 `AT+CHARGE` / `AT+DRIVE` / `AT+POWER=OFF`，不再接受独立芯片命令。
 - 超时建议：500 ms 之内没拿到 `OK` 即视为握手失败。
 
 ### 传感采样说明
@@ -277,6 +278,9 @@ OK\r\n
 
 - ADC2_IN8 不参与 1Hz 传感结构刷新，而是留给电机电流检测使用。
 - ADC2 访问通过互斥锁保护，避免传感任务和电机任务竞争同一外设。
+- 只有五路 ADC 在同一采样周期全部读取成功时，BATT_NTC、BATT_V、NTC1、NTC2、NTC3 的静态环形窗口才同步推进；每路使用最近五个完整成功周期的原始值求均值后再换算物理量，启动前四个完整周期按已有样本数求均值。
+- 五个窗口使用静态 RAM 和 `uint32_t` 运行和，不在 sensorTask 栈上分配快照数组；单路最大和仅为 `5 × 4095 = 20475`。
+- 电机 `MOTOR_I` 参与过流保护，因此不使用五周期均值，继续保留即时采样语义。
 
 ### 电机控制说明
 
@@ -466,7 +470,7 @@ AT+UARTTX=414243
 
 - nSLEEP 是否被正确拉高
 - EN/IN1 与 PH/IN2 接线是否对应
-- LM51770 是否处于允许工作状态（`AT+LM51770=ON` 拉低 EN/UVLO）
+- 充电路径是否已用 `AT+CHARGE=ON` 打开，或后级驱动路径是否已用 `AT+DRIVE=ON` 打开
 - 电机电流检测是否异常导致被误判过流
 
 ## 参与开发
@@ -477,7 +481,7 @@ AT+UARTTX=414243
 2. 为电机、电源和故障状态增加更多主机侧测试。
 3. 评估 DMA 串口接收或 ADC 扫描采样方案，但要先确认复杂度和 RAM 余量是否可接受。
 4. 若通过 CubeMX 重新生成代码，务必检查用户代码区和 [cmake/stm32cubemx/CMakeLists.txt](cmake/stm32cubemx/CMakeLists.txt) 是否仍然保留了应用层源文件。
-5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；v2.2 Debug 构建已使用约 93.63% RAM。
+5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；v3.0 Debug 构建使用约 94.14% RAM，五路滤波窗口位于静态 RAM。
 6. 新增业务模块时，优先放进 [App/Inc](App/Inc) 和 [App/Src](App/Src)，避免把业务重新写回 [Core](Core)。
 
 ## 相关文件

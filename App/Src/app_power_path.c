@@ -1,5 +1,11 @@
 #include "app_power_path.h"
 
+bool App_OutputTargetAllowsDirectControl(AppOutputTarget target)
+{
+    return (target == APP_OUTPUT_TARGET_NMOS1)
+        || (target == APP_OUTPUT_TARGET_NMOS2);
+}
+
 bool App_PowerPathApply(AppPowerMode mode,
                         AppPowerPathWrite write,
                         void *context)

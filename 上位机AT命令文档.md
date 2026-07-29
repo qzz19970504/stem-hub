@@ -2,8 +2,8 @@
 
 本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
 
-> 适用固件：`release-v2.2`
-> 更新方式：在 v2.1 文档基础上增量修订，保留原有控制、查询和兼容行为说明。
+> 适用固件：`release-v3.0`
+> 更新方式：在 v2.2 文档基础上更新电源路径协议和传感 ADC 滤波语义。
 
 ## 1. 文档范围
 
@@ -18,8 +18,7 @@
 - LED 总开关控制
 - 电机模式控制与状态查询
 - NMOS1、NMOS2 控制
-- MP4317 控制（PA8，AT+MP4317=ON/OFF）
-- LM51770 使能控制（PB3 EN/UVLO，AT+LM51770=ON/OFF）
+- MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
 - 传感采样结果查询
 - nFAULT、nFLT 状态查询
 
@@ -163,7 +162,8 @@ ERROR:UNSUPPORTED
 - ERROR:STATE_BUSY：读取状态时互斥资源暂不可用
 - ERROR:LED_QUEUE：LED 控制消息入队失败
 - ERROR:MOTOR_QUEUE：电机控制消息入队失败
-- ERROR:OUTPUT_QUEUE：NMOS、MP4317 或 LM51770 控制消息入队失败
+- ERROR:OUTPUT_QUEUE：NMOS 或完整电源模式控制消息入队失败
+- ERROR:PARSE：命令帧属于 AT 格式但不匹配当前命令集；旧的独立 LM51770/MP4317 指令也返回此错误
 - ERROR:HEX：`AT+UARTTX` 的十六进制负载为空、长度非法、含非法字符或超过 32 字节
 - ERROR:UART_DISABLED：UART2 和 UART3 均未打开，无法执行 `AT+UARTTX`
 - ERROR:UART_TX：至少一个已选择目标的 HAL 串口发送失败
@@ -194,16 +194,17 @@ ERROR:UNSUPPORTED
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
-| MP4317 | AT+MP4317=ON\r\n | 拉低 PA8，MP4317 进入工作 | OK |
-| MP4317 | AT+MP4317=OFF\r\n | 拉高 PA8，MP4317 关断 | OK |
-| LM51770 | AT+LM51770=ON\r\n | 拉低 EN/UVLO，LM51770 进入工作 | OK |
-| LM51770 | AT+LM51770=OFF\r\n | 拉高 EN/UVLO，LM51770 关断（默认状态） | OK |
+| 电源路径 | AT+CHARGE=ON\r\n | 先关闭两路，再仅打开 LM51770 | OK |
+| 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
+| 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
+| 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
+| 电源路径 | AT+POWER=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 
 ### 4.2 查询类命令
 
 | 分类 | 指令 | 作用 |
 | --- | --- | --- |
-| 采样 | AT+SENSE?\r\n | 查询最近一次传感采样结果 |
+| 采样 | AT+SENSE?\r\n | 查询最近传感快照；五路传感 ADC 为最近五周期均值 |
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 诊断 | AT+DIAG?\r\n | 查询控制链路、TX、传感任务及 UART2/UART3 RX 计数器 |
@@ -414,7 +415,7 @@ AT+MOTOR=STOP
 
 当前版本中 STOP 与 BRAKE 的行为一致，都会让 EN 关闭并保持驱动唤醒。
 
-### 5.4 NMOS、MP4317 与 LM51770 命令
+### 5.4 NMOS 与互锁电源路径命令
 
 #### 5.4.1 NMOS1 和 NMOS2
 
@@ -430,35 +431,24 @@ AT+NMOS2=OFF
 - ON 表示对应 GPIO 输出高电平。
 - OFF 表示对应 GPIO 输出低电平。
 
-#### 5.4.2 LM51770（PB3 EN/UVLO）
+#### 5.4.2 充电、驱动与全关
 
 ```text
-AT+LM51770=ON
-AT+LM51770=OFF
+AT+CHARGE=ON
+AT+CHARGE=OFF
+AT+DRIVE=ON
+AT+DRIVE=OFF
+AT+POWER=OFF
 ```
 
 说明：
 
-- 控制 PB3（EN/UVLO）的输出电平，进而控制 LM51770 的使能。
-- LM51770 是低电平使能，所以：
-  - `AT+LM51770=ON` 把 PB3 拉低，LM51770 进入工作。
-  - `AT+LM51770=OFF` 把 PB3 拉高，LM51770 关断。
-- 默认状态（开机 / 复位后）：PB3 高、LM51770 关断。
-
-#### 5.4.3 MP4317（PA8 NMOS 控制）
-
-```text
-AT+MP4317=ON
-AT+MP4317=OFF
-```
-
-说明：
-
-- 控制 PA8 的输出电平。PA8 经外部 NMOS 控制 MP4317 的使能。
-- MP4317 是低电平使能，所以：
-  - `AT+MP4317=ON` 把 PA8 拉低，MP4317 开。
-  - `AT+MP4317=OFF` 把 PA8 拉高，MP4317 关。
-- 默认状态（开机 / 复位后）：PA8 高、MP4317 关。
+- LM51770（PB3 EN/UVLO）与 MP4317（PA8）均为低电平使能。
+- 固件只允许三种稳定状态：两路全关、仅 LM51770 开、仅 MP4317 开。
+- `AT+CHARGE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PB3。
+- `AT+DRIVE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PA8。
+- `AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 都关闭两路。
+- 旧的 `AT+LM51770=ON/OFF` 与 `AT+MP4317=ON/OFF` 已删除，不能绕过 MCU 互锁。
 
 ### 5.5 传感查询命令
 
@@ -506,7 +496,10 @@ MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：
 注意：
 
 - BATT_NTC / NTC1_C / NTC2_C / NTC3_C 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大（Vadc 已 < 25mV）。
+- 只有五路 ADC 在同一采样周期全部读取成功时才同步推进窗口；BATT_NTC、BATT_V、NTC1_C、NTC2_C、NTC3_C 先对最近五个完整成功周期的原始值求均值，再换算物理量，启动前四个完整周期按已有样本数计算。
+- 五个固定窗口和运行和位于静态 RAM，不在 sensorTask 栈上创建五份快照；单路运行和最大为 20475。
 - MOTOR_I 由电机状态产生，sensorTask 每秒最多更新一次；上次残值不影响停机显示（电机模式 ≠ FWD/REV 时强制归零）。
+- MOTOR_I 参与即时过流保护，不使用五周期滑动平均。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
 
 ### 5.6 故障查询命令
@@ -633,7 +626,7 @@ OK
 示例：
 
 ```text
-+VERSION:release-v2.2
++VERSION:release-v3.0
 OK
 ```
 
@@ -642,8 +635,9 @@ OK
 - 用于上位机连接 UART1 后的握手。拿到 `+VERSION:...` + `OK` 即可确认固件能解析且能应答。
 - `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
 - 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
-- v2.2 相比 v2.1 新增 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段。
-- 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道。
+- v3.0 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；旧上位机不能继续发送独立芯片开关命令。
+- v2.2 相比 v2.1 新增的 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段在 v3.0 中继续保留。
+- 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道，v2.2 上位机也不能假定独立电源芯片指令仍有效。
 
 ## 6. 双向隧道与兼容透传规则
 
@@ -711,7 +705,7 @@ HELLO\r\n
 3. 从下游向 UART2/UART3 发送数据，确认 UART1 收到带正确来源的 `+UART2RX` / `+UART3RX` 事件。
 4. 查询一次 AT+SENSE?，确认传感任务已开始运行。
 5. 测试 AT+MOTOR=WAKE、AT+MOTOR=FWD、AT+MOTOR? 的闭环。
-6. 最后再联动 NMOS、MP4317、LM51770 和故障读取。
+6. 最后再联动 NMOS、`AT+CHARGE`、`AT+DRIVE`、`AT+POWER=OFF` 和故障读取。
 
 一个最小联调流程示例：
 
@@ -725,8 +719,9 @@ AT+MOTOR?
 AT+MOTOR=BRAKE
 AT+FAULT?
 AT+NMOS1=ON
-AT+MP4317=ON
-AT+LM51770=ON
+AT+CHARGE=ON
+AT+POWER=OFF
+AT+DRIVE=ON
 ```
 
 ## 8. 上位机实现建议
@@ -773,11 +768,12 @@ AT+LM51770=ON
 
 ### 9.2 为什么查询采样值不稳定
 
-原因可能包括：
+固件已对五路 1 Hz 传感 ADC 使用最近五周期滑动平均，但仍可能受以下因素影响：
 
 - ADC 输入本身硬件噪声较大
-- 传感任务每 1 秒才更新一次，不是高速采样接口
-- NTC 和电机电流虽已采用实际查表/比例换算，但仍受 ADC 量化、参考电压和外围电阻误差影响
+- 传感任务每 1 秒才更新一次，完整窗口对应最近约 5 秒，不是高速采样接口
+- NTC 与电池电压仍受 ADC 量化、参考电压和外围电阻误差影响
+- 电机电流为了不延迟过流保护保持即时采样，因此波动不会被五周期窗口平滑
 
 ### 9.3 为什么 CURRENT_MA 看起来不像真实电流
 

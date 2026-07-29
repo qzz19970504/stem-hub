@@ -42,6 +42,11 @@ int main(void)
 {
     PowerEventLog log = {0};
 
+    assert(App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_NMOS1));
+    assert(App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_NMOS2));
+    assert(!App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_UVLO));
+    assert(!App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_MP4317));
+
     assert(App_PowerPathApply(APP_POWER_MODE_OFF, RecordWrite, &log));
     assert(log.count == 2U);
     ExpectEvent(&log, 0U, APP_OUTPUT_TARGET_UVLO, false);
