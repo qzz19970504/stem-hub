@@ -1,5 +1,6 @@
 #include "app_output.h"
 
+#include "app_charge_cycle.h"
 #include "app_power_path.h"
 #include "app_runtime.h"
 #include "app_state.h"
@@ -65,24 +66,69 @@ static void App_OutputWritePowerPath(AppOutputTarget target,
     App_OutputApplyTarget(target, enabled);
 }
 
+static void App_OutputApplyPowerAction(AppChargeCycleAction action)
+{
+    if (action.apply_mode)
+    {
+        (void)App_PowerPathApply(action.mode,
+                                 App_OutputWritePowerPath,
+                                 NULL);
+    }
+}
+
 void App_NmosTask(void *argument)
 {
     AppOutputRequest request;
+    AppChargeCycle charge_cycle;
+    AppChargeCycleAction action;
+    uint32_t now_tick;
+    uint32_t wait_ticks;
+    osStatus_t queue_status;
+    uint32_t tick_frequency = osKernelGetTickFreq();
+    uint32_t charge_on_ticks =
+        App_ChargeCycleMillisecondsToTicks(APP_CHARGE_ON_TIME_MS, tick_frequency);
+    uint32_t charge_off_ticks =
+        App_ChargeCycleMillisecondsToTicks(APP_CHARGE_OFF_TIME_MS, tick_frequency);
 
     (void)argument;
 
+    if (!App_ChargeCycleInit(&charge_cycle, charge_on_ticks, charge_off_ticks))
+    {
+        (void)App_PowerPathApply(APP_POWER_MODE_OFF,
+                                 App_OutputWritePowerPath,
+                                 NULL);
+        Error_Handler();
+    }
+
     for (;;)
     {
-        if (osMessageQueueGet(g_app_runtime.output_queue, &request, NULL, osWaitForever) != osOK)
+        now_tick = osKernelGetTickCount();
+        action = App_ChargeCyclePoll(&charge_cycle, now_tick);
+        App_OutputApplyPowerAction(action);
+
+        now_tick = osKernelGetTickCount();
+        wait_ticks = App_ChargeCycleWaitTicks(&charge_cycle, now_tick);
+        queue_status = osMessageQueueGet(g_app_runtime.output_queue,
+                                         &request,
+                                         NULL,
+                                         wait_ticks);
+
+        if (queue_status == osErrorTimeout)
+        {
+            continue;
+        }
+
+        if (queue_status != osOK)
         {
             continue;
         }
 
         if (request.type == APP_OUTPUT_REQUEST_SET_POWER_MODE)
         {
-            (void)App_PowerPathApply(request.data.power_mode,
-                                     App_OutputWritePowerPath,
-                                     NULL);
+            action = App_ChargeCycleRequest(&charge_cycle,
+                                            request.data.power_mode,
+                                            osKernelGetTickCount());
+            App_OutputApplyPowerAction(action);
             continue;
         }
 
