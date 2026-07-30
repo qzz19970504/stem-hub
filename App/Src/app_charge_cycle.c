@@ -26,6 +26,25 @@ static bool App_ChargeCycleDeadlineReached(uint32_t now_tick,
     return (int32_t)(now_tick - deadline_tick) >= 0;
 }
 
+uint32_t App_ChargeCycleMillisecondsToTicks(uint32_t milliseconds,
+                                            uint32_t tick_frequency_hz)
+{
+    uint64_t ticks;
+
+    if ((milliseconds == 0U) || (tick_frequency_hz == 0U))
+    {
+        return 0U;
+    }
+
+    ticks = (((uint64_t)milliseconds * tick_frequency_hz) + 999U) / 1000U;
+    if ((ticks == 0U) || (ticks > (uint64_t)INT32_MAX))
+    {
+        return 0U;
+    }
+
+    return (uint32_t)ticks;
+}
+
 bool App_ChargeCycleInit(AppChargeCycle *cycle,
                          uint32_t on_ticks,
                          uint32_t off_ticks)

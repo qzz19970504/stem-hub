@@ -29,6 +29,8 @@ typedef struct
     AppPowerMode mode;
 } AppChargeCycleAction;
 
+uint32_t App_ChargeCycleMillisecondsToTicks(uint32_t milliseconds,
+                                            uint32_t tick_frequency_hz);
 bool App_ChargeCycleInit(AppChargeCycle *cycle,
                          uint32_t on_ticks,
                          uint32_t off_ticks);

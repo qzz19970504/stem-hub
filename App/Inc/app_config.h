@@ -4,7 +4,10 @@
 /* 固件版本号。上位机通过 AT+VERSION? 查询此字符串用于握手；
  * bump 版本只需改这一行。保持简短——回包整体长度受
  * APP_AT_PROTOCOL_MAX_LINE_LENGTH (96) 约束。*/
-#define APP_FIRMWARE_VERSION "release-v3.0"
+#define APP_FIRMWARE_VERSION "release-v3.1"
+
+#define APP_CHARGE_ON_TIME_MS 10000U
+#define APP_CHARGE_OFF_TIME_MS 50000U
 
 #define APP_AT_PROTOCOL_MAX_LINE_LENGTH 96U
 #define APP_UART_TUNNEL_CHUNK_SIZE 32U

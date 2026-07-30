@@ -135,6 +135,16 @@ static void TestTickWrap(void)
     assert(cycle.deadline_tick == 54U);
 }
 
+static void TestMillisecondsUseCeilingTickConversion(void)
+{
+    assert(App_ChargeCycleMillisecondsToTicks(10000U, 1000U) == 10000U);
+    assert(App_ChargeCycleMillisecondsToTicks(50000U, 100U) == 5000U);
+    assert(App_ChargeCycleMillisecondsToTicks(1U, 128U) == 1U);
+    assert(App_ChargeCycleMillisecondsToTicks(0U, 1000U) == 0U);
+    assert(App_ChargeCycleMillisecondsToTicks(1000U, 0U) == 0U);
+    assert(App_ChargeCycleMillisecondsToTicks(UINT32_MAX, UINT32_MAX) == 0U);
+}
+
 int main(void)
 {
     TestFirstChargeAndFullCycle();
@@ -142,5 +152,6 @@ int main(void)
     TestOffAndDriveCancelImmediately();
     TestUnrelatedWorkDoesNotExtendDeadline();
     TestTickWrap();
+    TestMillisecondsUseCeilingTickConversion();
     return 0;
 }
