@@ -2,8 +2,8 @@
 
 本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
 
-> 适用固件：`release-v3.0`
-> 更新方式：在 v2.2 文档基础上更新电源路径协议和传感 ADC 滤波语义。
+> 适用固件：`release-v3.1`
+> 更新方式：在 v3.0 文档基础上更新 LM51770 间歇充电语义。
 
 ## 1. 文档范围
 
@@ -194,7 +194,7 @@ ERROR:UNSUPPORTED
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
-| 电源路径 | AT+CHARGE=ON\r\n | 先关闭两路，再仅打开 LM51770 | OK |
+| 电源路径 | AT+CHARGE=ON\r\n | 启动固定 10 秒开 / 50 秒关的 LM51770 充电循环 | OK |
 | 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
 | 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
@@ -444,11 +444,16 @@ AT+POWER=OFF
 说明：
 
 - LM51770（PB3 EN/UVLO）与 MP4317（PA8）均为低电平使能。
-- 固件只允许三种稳定状态：两路全关、仅 LM51770 开、仅 MP4317 开。
-- `AT+CHARGE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PB3。
+- 固件只允许三种物理状态：两路全关、仅 LM51770 开、仅 MP4317 开。
+- `AT+CHARGE=ON` 启动固定循环：先把 PB3、PA8 都置为关断电平，再仅拉低 PB3 10 秒，随后两路全关 50 秒，然后重复。
+- 在 10 秒开启段或 50 秒关闭段重复发送 `AT+CHARGE=ON` 都不会重置当前阶段的截止时间。
+- CHARGE 成功回包表示循环请求已入队；上位机 CHARGE 开关表示循环已启用，不表示 PB3 此刻必为开启电平。
 - `AT+DRIVE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PA8。
-- `AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 都关闭两路。
+- `AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 都立即取消充电循环并关闭两路；`AT+DRIVE=ON` 也会立即取消循环并进入驱动状态。
+- MCU 复位后保持两路全关，不自动恢复充电循环。
 - 旧的 `AT+LM51770=ON/OFF` 与 `AT+MP4317=ON/OFF` 已删除，不能绕过 MCU 互锁。
+
+安全边界：10/50 秒循环仅为临时降额措施，不使用 NTC，也没有充电电流、累计充电时长或自动故障锁存保护。它不构成器件安全保证；查明实际充电电流和损坏原因前，不应进行无人值守满功率带载测试。
 
 ### 5.5 传感查询命令
 
@@ -626,7 +631,7 @@ OK
 示例：
 
 ```text
-+VERSION:release-v3.0
++VERSION:release-v3.1
 OK
 ```
 
@@ -635,7 +640,7 @@ OK
 - 用于上位机连接 UART1 后的握手。拿到 `+VERSION:...` + `OK` 即可确认固件能解析且能应答。
 - `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
 - 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
-- v3.0 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；旧上位机不能继续发送独立芯片开关命令。
+- v3.1 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
 - v2.2 相比 v2.1 新增的 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段在 v3.0 中继续保留。
 - 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道，v2.2 上位机也不能假定独立电源芯片指令仍有效。
 

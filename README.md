@@ -2,7 +2,7 @@
 
 基于 STM32F103C8T6 和 FreeRTOS 的嵌入式控制项目，当前聚焦于多路 ADC 采集、DRV8874 电机驱动、UART AT 指令控制，以及 UART1 与 UART2/UART3 之间的可控双向二进制隧道。
 
-当前固件版本为 `release-v3.0`。v3.0 在 v2.2 的双向 UART 隧道基础上，将 LM51770 与 MP4317 收敛为 MCU 强制互斥的充电、驱动、全关三种状态，并对五路 1 Hz 传感 ADC 使用最近五个周期的滑动平均。
+当前固件版本为 `release-v3.1`。v3.1 保留 MCU 强制互斥的充电、驱动、全关三种电源状态和五路 1 Hz 传感 ADC 的五周期滑动平均，并将充电改为固定 10 秒开启、50 秒关闭的自动循环。
 
 ## 快速开始
 
@@ -74,6 +74,7 @@
 - nFAULT 和 nFLT 目前只支持 GPIO 读取和查询，没有完整故障恢复流程。
 - 没有提供下载、烧录、量产参数配置脚本。
 - 没有引入 DMA 串口接收或 ADC DMA 扫描，当前实现以简单、稳定、容易维护为优先。
+- v3.1 的 10 秒开 / 50 秒关只是一项临时降额措施，不包含 NTC、充电电流、累计充电时长或故障锁存保护，也不能保证 LM51770 或外部功率器件安全。带载前仍必须核查实际充电电流、MOSFET、电感饱和、限流设定和散热设计。
 
 ## 先决条件
 
@@ -198,7 +199,7 @@ at+led=on\r\n
 | AT+NMOS1=OFF | 关闭 NMOS1 |
 | AT+NMOS2=ON | 打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
-| AT+CHARGE=ON | 先关闭 LM51770 与 MP4317，再仅打开 LM51770 |
+| AT+CHARGE=ON | 启动 LM51770 固定 10 秒开 / 50 秒关的充电循环 |
 | AT+CHARGE=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+DRIVE=ON | 先关闭 LM51770 与 MP4317，再仅打开 MP4317 |
 | AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
@@ -212,7 +213,7 @@ at+led=on\r\n
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
-| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.0 |
+| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.1 |
 
 控制类命令成功时返回：
 
@@ -257,8 +258,8 @@ OK\r\n
 上位机连上 UART1 后，先发一次 `AT+VERSION?`，约定如下：
 
 - 成功回包：单行 `+VERSION:<version>` 后跟 `OK`。
-- 例：`+VERSION:release-v3.0\r\nOK\r\n`。
-- 拿到回包即确认固件可解析且能应答；v3.0 使用 `AT+CHARGE` / `AT+DRIVE` / `AT+POWER=OFF`，不再接受独立芯片命令。
+- 例：`+VERSION:release-v3.1\r\nOK\r\n`。
+- 拿到回包即确认固件可解析且能应答；v3.x 使用 `AT+CHARGE` / `AT+DRIVE` / `AT+POWER=OFF`，不再接受独立芯片命令。
 - 超时建议：500 ms 之内没拿到 `OK` 即视为握手失败。
 
 ### 传感采样说明
@@ -481,7 +482,7 @@ AT+UARTTX=414243
 2. 为电机、电源和故障状态增加更多主机侧测试。
 3. 评估 DMA 串口接收或 ADC 扫描采样方案，但要先确认复杂度和 RAM 余量是否可接受。
 4. 若通过 CubeMX 重新生成代码，务必检查用户代码区和 [cmake/stm32cubemx/CMakeLists.txt](cmake/stm32cubemx/CMakeLists.txt) 是否仍然保留了应用层源文件。
-5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；v3.0 Debug 构建使用约 94.14% RAM，五路滤波窗口位于静态 RAM。
+5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；v3.1 Debug 构建使用约 94.26% RAM，五路滤波窗口位于静态 RAM，本次充电循环未新增任务栈。
 6. 新增业务模块时，优先放进 [App/Inc](App/Inc) 和 [App/Src](App/Src)，避免把业务重新写回 [Core](Core)。
 
 ## 相关文件
