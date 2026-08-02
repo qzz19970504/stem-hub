@@ -165,6 +165,7 @@ void App_MotorTask(void *argument)
     AppMotorRequest request;
     AppMotorStatus snapshot;
     uint32_t current_ma = 0U;
+    bool thermal_sleep_applied = false;
 
     (void)argument;
 
@@ -184,11 +185,18 @@ void App_MotorTask(void *argument)
         }
 
         bool thermal_active = false;
-        if (!App_StateTryGetThermalProtectionActive(&thermal_active)
-            || thermal_active)
+        bool state_available =
+            App_StateTryGetThermalProtectionActive(&thermal_active);
+        if (App_TaskSafetyRequiresForcedSafe(state_available, thermal_active))
         {
+            if (!thermal_sleep_applied)
+            {
+                App_MotorApplyMode(APP_MOTOR_MODE_SLEEP);
+                thermal_sleep_applied = true;
+            }
             continue;
         }
+        thermal_sleep_applied = false;
 
         if (!App_MotorTryGetStatus(&snapshot))
         {

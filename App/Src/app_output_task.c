@@ -124,6 +124,23 @@ static void App_OutputRefreshChargeConfiguration(AppChargeCycle *charge_cycle,
     }
 }
 
+static void App_OutputForceSafe(AppChargeCycle *charge_cycle)
+{
+    AppChargeCycleAction action = App_ChargeCycleRequest(
+        charge_cycle,
+        APP_POWER_MODE_OFF,
+        osKernelGetTickCount());
+    App_OutputApplyPowerAction(action);
+    App_OutputShutDownAuxiliaryOutputs();
+}
+
+static bool App_OutputThermalConstraintActive(void)
+{
+    bool thermal_active = false;
+    bool state_available = App_StateTryGetThermalProtectionActive(&thermal_active);
+    return App_TaskSafetyRequiresForcedSafe(state_available, thermal_active);
+}
+
 void App_NmosTask(void *argument)
 {
     AppOutputRequest request;
@@ -138,6 +155,10 @@ void App_NmosTask(void *argument)
         APP_CHARGE_CYCLE_TIME_SECONDS * 1000U,
         tick_frequency);
     uint32_t charge_on_ticks;
+    uint32_t safety_check_ticks = App_ChargeCycleMillisecondsToTicks(
+        APP_THERMAL_CONSUMER_CHECK_PERIOD_MS,
+        tick_frequency);
+    bool thermal_safe_applied = false;
 
     (void)argument;
 
@@ -155,9 +176,26 @@ void App_NmosTask(void *argument)
                                  NULL);
         Error_Handler();
     }
+    if (safety_check_ticks == 0U)
+    {
+        safety_check_ticks = 1U;
+    }
 
     for (;;)
     {
+        if (App_OutputThermalConstraintActive())
+        {
+            if (!thermal_safe_applied)
+            {
+                App_OutputForceSafe(&charge_cycle);
+                thermal_safe_applied = true;
+            }
+        }
+        else
+        {
+            thermal_safe_applied = false;
+        }
+
         App_OutputRefreshChargeConfiguration(&charge_cycle, tick_frequency);
         now_tick = osKernelGetTickCount();
         action = App_ChargeCyclePoll(&charge_cycle, now_tick);
@@ -165,6 +203,11 @@ void App_NmosTask(void *argument)
 
         now_tick = osKernelGetTickCount();
         wait_ticks = App_ChargeCycleWaitTicks(&charge_cycle, now_tick);
+        if ((wait_ticks == APP_CHARGE_CYCLE_WAIT_FOREVER)
+            || (wait_ticks > safety_check_ticks))
+        {
+            wait_ticks = safety_check_ticks;
+        }
         queue_status = osMessageQueueGet(g_app_runtime.output_queue,
                                          &request,
                                          NULL,
@@ -184,11 +227,8 @@ void App_NmosTask(void *argument)
 
         if (request.type == APP_OUTPUT_REQUEST_THERMAL_STOP)
         {
-            action = App_ChargeCycleRequest(&charge_cycle,
-                                            APP_POWER_MODE_OFF,
-                                            osKernelGetTickCount());
-            App_OutputApplyPowerAction(action);
-            App_OutputShutDownAuxiliaryOutputs();
+            App_OutputForceSafe(&charge_cycle);
+            thermal_safe_applied = true;
             continue;
         }
 

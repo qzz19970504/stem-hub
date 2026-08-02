@@ -80,6 +80,10 @@ static void TestTripDispatchesStopsWithoutAStateWriter(void)
 
 static void TestConsumerGuardsFailSafe(void)
 {
+    assert(App_TaskSafetyRequiresForcedSafe(false, false));
+    assert(App_TaskSafetyRequiresForcedSafe(true, true));
+    assert(!App_TaskSafetyRequiresForcedSafe(true, false));
+
     assert(!App_TaskSafetyAllowsPower(false, false, APP_POWER_MODE_CHARGE));
     assert(App_TaskSafetyAllowsPower(false, false, APP_POWER_MODE_OFF));
     assert(!App_TaskSafetyAllowsPower(true, true, APP_POWER_MODE_DRIVE));

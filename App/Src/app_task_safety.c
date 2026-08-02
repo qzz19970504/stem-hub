@@ -33,24 +33,35 @@ void App_TaskSafetyHandleThermalTransition(
     }
 }
 
+bool App_TaskSafetyRequiresForcedSafe(bool state_available,
+                                      bool thermal_active)
+{
+    return !state_available || thermal_active;
+}
+
 bool App_TaskSafetyAllowsPower(bool state_available,
                                bool thermal_active,
                                AppPowerMode mode)
 {
-    return App_ThermalAllowsPowerMode(!state_available || thermal_active, mode);
+    return App_ThermalAllowsPowerMode(
+        App_TaskSafetyRequiresForcedSafe(state_available, thermal_active),
+        mode);
 }
 
 bool App_TaskSafetyAllowsOutput(bool state_available,
                                 bool thermal_active,
                                 bool enabled)
 {
-    return App_ThermalAllowsOutputState(!state_available || thermal_active,
-                                        enabled);
+    return App_ThermalAllowsOutputState(
+        App_TaskSafetyRequiresForcedSafe(state_available, thermal_active),
+        enabled);
 }
 
 bool App_TaskSafetyAllowsMotor(bool state_available,
                                bool thermal_active,
                                AppMotorMode mode)
 {
-    return App_ThermalAllowsMotorMode(!state_available || thermal_active, mode);
+    return App_ThermalAllowsMotorMode(
+        App_TaskSafetyRequiresForcedSafe(state_available, thermal_active),
+        mode);
 }

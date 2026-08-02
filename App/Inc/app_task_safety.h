@@ -19,6 +19,8 @@ typedef struct
 void App_TaskSafetyHandleThermalTransition(
     AppThermalTransition transition,
     const AppTaskSafetyCallbacks *callbacks);
+bool App_TaskSafetyRequiresForcedSafe(bool state_available,
+                                      bool thermal_active);
 bool App_TaskSafetyAllowsPower(bool state_available,
                                bool thermal_active,
                                AppPowerMode mode);
