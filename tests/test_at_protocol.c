@@ -34,6 +34,15 @@ static void expect_power_command(const char *line, AppPowerMode expected_mode)
     assert(command.data.power.mode == expected_mode);
 }
 
+static void expect_charge_time_command(const char *line, uint32_t expected_seconds)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SET_CHARGE_TIME);
+    assert(command.data.charge_time.seconds == expected_seconds);
+}
+
 static void expect_uart_payload(const char *line,
                                 const uint8_t *expected_payload,
                                 size_t expected_length)
@@ -78,6 +87,18 @@ int main(void)
     expect_power_command("AT+DRIVE=ON\r\n", APP_POWER_MODE_DRIVE);
     expect_power_command("AT+DRIVE=OFF\r\n", APP_POWER_MODE_OFF);
     expect_power_command("AT+POWER=OFF\r\n", APP_POWER_MODE_OFF);
+
+    expect_charge_time_command("AT+CHARGE_TIME=1\r\n", 1U);
+    expect_charge_time_command("AT+CHARGE_TIME=10\r\n", 10U);
+    expect_charge_time_command("AT+CHARGE_TIME=60\r\n", 60U);
+    expect_query_command("AT+CHARGE_TIME=?\r\n", APP_AT_COMMAND_QUERY_CHARGE_TIME);
+
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=0\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=61\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=-1\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=1.5\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=10X\r\n", &command));
 
     assert(!AppAtProtocol_Parse("AT+LM51770=ON\r\n", &command));
     assert(!AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));

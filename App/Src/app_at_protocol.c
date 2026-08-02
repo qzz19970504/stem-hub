@@ -120,8 +120,47 @@ static bool AppAtProtocol_ParseOnOff(const char *value, bool *enabled)
     return false;
 }
 
+static bool AppAtProtocol_ParseChargeTime(const char *value, uint32_t *seconds)
+{
+    const char *current;
+    uint32_t parsed_seconds = 0U;
+
+    if ((value == NULL) || (seconds == NULL) || (*value == '\0'))
+    {
+        return false;
+    }
+
+    for (current = value; *current != '\0'; ++current)
+    {
+        if ((*current < '0') || (*current > '9'))
+        {
+            return false;
+        }
+
+        parsed_seconds = (parsed_seconds * 10U) + (uint32_t)(*current - '0');
+        if (parsed_seconds > APP_CHARGE_MAX_ON_TIME_SECONDS)
+        {
+            return false;
+        }
+    }
+
+    if (parsed_seconds < APP_CHARGE_MIN_ON_TIME_SECONDS)
+    {
+        return false;
+    }
+
+    *seconds = parsed_seconds;
+    return true;
+}
+
 static bool AppAtProtocol_MatchQuery(const char *line, AppAtCommand *out_command)
 {
+    if (strcmp(line, "AT+CHARGE_TIME=?") == 0)
+    {
+        out_command->type = APP_AT_COMMAND_QUERY_CHARGE_TIME;
+        return true;
+    }
+
     if (strcmp(line, "AT+SENSE?") == 0)
     {
         out_command->type = APP_AT_COMMAND_QUERY_SENSE;
@@ -321,6 +360,13 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
     {
         out_command->type = APP_AT_COMMAND_SET_POWER_MODE;
         out_command->data.power.mode = enabled ? APP_POWER_MODE_CHARGE : APP_POWER_MODE_OFF;
+        return true;
+    }
+
+    if (AppAtProtocol_MatchAssignment("AT+CHARGE_TIME=", command_body, &value)
+        && AppAtProtocol_ParseChargeTime(value, &out_command->data.charge_time.seconds))
+    {
+        out_command->type = APP_AT_COMMAND_SET_CHARGE_TIME;
         return true;
     }
 
