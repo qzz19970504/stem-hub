@@ -26,6 +26,15 @@ static bool App_ChargeCycleDeadlineReached(uint32_t now_tick,
     return (int32_t)(now_tick - deadline_tick) >= 0;
 }
 
+static void App_ChargeCycleStartOn(AppChargeCycle *cycle,
+                                   uint32_t now_tick)
+{
+    cycle->phase = APP_CHARGE_CYCLE_ON_PHASE;
+    cycle->active_off_ticks = cycle->cycle_ticks
+                              - cycle->configured_on_ticks;
+    cycle->deadline_tick = now_tick + cycle->configured_on_ticks;
+}
+
 uint32_t App_ChargeCycleMillisecondsToTicks(uint32_t milliseconds,
                                             uint32_t tick_frequency_hz)
 {
@@ -46,22 +55,37 @@ uint32_t App_ChargeCycleMillisecondsToTicks(uint32_t milliseconds,
 }
 
 bool App_ChargeCycleInit(AppChargeCycle *cycle,
-                         uint32_t on_ticks,
-                         uint32_t off_ticks)
+                         uint32_t cycle_ticks,
+                         uint32_t on_ticks)
 {
     if ((cycle == NULL)
+        || (cycle_ticks == 0U)
         || (on_ticks == 0U)
-        || (off_ticks == 0U)
-        || (on_ticks > (uint32_t)INT32_MAX)
-        || (off_ticks > (uint32_t)INT32_MAX))
+        || (on_ticks > cycle_ticks)
+        || (cycle_ticks > (uint32_t)INT32_MAX))
     {
         return false;
     }
 
     cycle->phase = APP_CHARGE_CYCLE_IDLE;
     cycle->deadline_tick = 0U;
-    cycle->on_ticks = on_ticks;
-    cycle->off_ticks = off_ticks;
+    cycle->cycle_ticks = cycle_ticks;
+    cycle->configured_on_ticks = on_ticks;
+    cycle->active_off_ticks = cycle_ticks - on_ticks;
+    return true;
+}
+
+bool App_ChargeCycleConfigureOnTicks(AppChargeCycle *cycle,
+                                     uint32_t on_ticks)
+{
+    if ((cycle == NULL)
+        || (on_ticks == 0U)
+        || (on_ticks > cycle->cycle_ticks))
+    {
+        return false;
+    }
+
+    cycle->configured_on_ticks = on_ticks;
     return true;
 }
 
@@ -81,8 +105,7 @@ AppChargeCycleAction App_ChargeCycleRequest(AppChargeCycle *cycle,
             return App_ChargeCycleNoAction();
         }
 
-        cycle->phase = APP_CHARGE_CYCLE_ON_PHASE;
-        cycle->deadline_tick = now_tick + cycle->on_ticks;
+        App_ChargeCycleStartOn(cycle, now_tick);
         return App_ChargeCycleApply(APP_POWER_MODE_CHARGE);
     }
 
@@ -109,13 +132,18 @@ AppChargeCycleAction App_ChargeCyclePoll(AppChargeCycle *cycle,
 
     if (cycle->phase == APP_CHARGE_CYCLE_ON_PHASE)
     {
+        if (cycle->active_off_ticks == 0U)
+        {
+            App_ChargeCycleStartOn(cycle, now_tick);
+            return App_ChargeCycleNoAction();
+        }
+
         cycle->phase = APP_CHARGE_CYCLE_OFF_PHASE;
-        cycle->deadline_tick = now_tick + cycle->off_ticks;
+        cycle->deadline_tick = now_tick + cycle->active_off_ticks;
         return App_ChargeCycleApply(APP_POWER_MODE_OFF);
     }
 
-    cycle->phase = APP_CHARGE_CYCLE_ON_PHASE;
-    cycle->deadline_tick = now_tick + cycle->on_ticks;
+    App_ChargeCycleStartOn(cycle, now_tick);
     return App_ChargeCycleApply(APP_POWER_MODE_CHARGE);
 }
 
