@@ -20,6 +20,10 @@ AppRuntime g_app_runtime = {
 osStatus_t osMutexAcquire(osMutexId_t mutex_id, uint32_t timeout)
 {
     (void)timeout;
+    if (mutex_id == NULL)
+    {
+        return osError;
+    }
     if ((mutex_id == g_app_runtime.state_mutex) && !state_mutex_available)
     {
         return osError;
@@ -91,11 +95,11 @@ static void TestThermalProtectionDefaultsInactiveAndCanChange(void)
     assert(App_StateTryGetThermalProtectionActive(&is_active));
     assert(!is_active);
 
-    App_StateSetThermalProtectionActive(true);
+    assert(App_StateSetThermalProtectionActive(true));
     assert(App_StateTryGetThermalProtectionActive(&is_active));
     assert(is_active);
 
-    App_StateSetThermalProtectionActive(false);
+    assert(App_StateSetThermalProtectionActive(false));
     assert(App_StateTryGetThermalProtectionActive(&is_active));
     assert(!is_active);
 }
@@ -112,7 +116,19 @@ static void TestTryGetReportsInvalidOutputAndBusyState(void)
     assert(!App_StateTryGetChargeOnTimeSeconds(&seconds));
     assert(!App_StateTryGetThermalProtectionActive(&is_active));
     assert(!App_StateSetChargeOnTimeSeconds(APP_CHARGE_DEFAULT_ON_TIME_SECONDS));
+    assert(!App_StateSetThermalProtectionActive(true));
     state_mutex_available = true;
+}
+
+static void TestMissingStateMutexFailsSafely(void)
+{
+    osMutexId_t state_mutex = g_app_runtime.state_mutex;
+    bool is_active = false;
+
+    g_app_runtime.state_mutex = NULL;
+    assert(!App_StateSetThermalProtectionActive(true));
+    assert(!App_StateTryGetThermalProtectionActive(&is_active));
+    g_app_runtime.state_mutex = state_mutex;
 }
 
 int main(void)
@@ -122,5 +138,6 @@ int main(void)
     TestChargeTimeRejectsOutOfRangeWithoutChangingState();
     TestThermalProtectionDefaultsInactiveAndCanChange();
     TestTryGetReportsInvalidOutputAndBusyState();
+    TestMissingStateMutexFailsSafely();
     return 0;
 }

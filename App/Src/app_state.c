@@ -237,15 +237,16 @@ bool App_StateTryGetChargeOnTimeSeconds(uint32_t *seconds)
     return true;
 }
 
-void App_StateSetThermalProtectionActive(bool active)
+bool App_StateSetThermalProtectionActive(bool active)
 {
     if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
     {
-        return;
+        return false;
     }
 
     g_app_state.thermal_protection_active = active;
     (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
 }
 
 bool App_StateTryGetThermalProtectionActive(bool *active)
