@@ -36,6 +36,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_charge_cycle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_thermal_guard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_task_safety.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_sensor_thermal.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_uart_tunnel.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_bridge_task.c

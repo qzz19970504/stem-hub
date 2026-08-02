@@ -11,6 +11,7 @@
 #include "app_ntc_table.h"
 #include "app_output.h"
 #include "app_runtime.h"
+#include "app_sensor_thermal.h"
 #include "app_state.h"
 #include "app_task_safety.h"
 #include "app_thermal_guard.h"
@@ -26,8 +27,6 @@ typedef enum
 
 static AppAdcRollingMean
     g_sensor_filters[APP_ADC_ROLLING_CHANNEL_COUNT];
-static uint16_t
-    g_sensor_cycle_samples[APP_ADC_ROLLING_CHANNEL_COUNT];
 static uint16_t
     g_sensor_cycle_means[APP_ADC_ROLLING_CHANNEL_COUNT];
 static AppThermalGuard g_sensor_thermal_guard;
@@ -243,7 +242,7 @@ void App_SensorTask(void *argument)
 {
     AppSensorSnapshot next_snapshot;
     uint16_t raw = 0U;
-    bool success = false;
+    bool channel_valid[APP_ADC_ROLLING_CHANNEL_COUNT];
 
     (void)argument;
 
@@ -255,78 +254,111 @@ void App_SensorTask(void *argument)
     {
         App_RuntimeNoteSensorLoop();
         (void)memset(&next_snapshot, 0, sizeof(next_snapshot));
-        success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw);
-        if (success)
+        (void)memset(channel_valid, 0, sizeof(channel_valid));
+
+        if (App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw))
         {
-            g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_NTC] = raw;
+            g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_NTC] =
+                App_AdcRollingMeanPush(
+                    &g_sensor_filters[APP_SENSOR_FILTER_BATTERY_NTC],
+                    raw);
+            channel_valid[APP_SENSOR_FILTER_BATTERY_NTC] = true;
         }
         else
         {
             App_RuntimeNoteSensorAdc1ReadFail();
         }
 
-        if (success)
+        if (App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_5, &raw))
         {
-            success = App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_5, &raw);
-            if (success)
-            {
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_VOLTAGE] = raw;
-            }
-            else
-            {
-                App_RuntimeNoteSensorAdc1ReadFail();
-            }
+            g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_VOLTAGE] =
+                App_AdcRollingMeanPush(
+                    &g_sensor_filters[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
+                    raw);
+            channel_valid[APP_SENSOR_FILTER_BATTERY_VOLTAGE] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc1ReadFail();
         }
 
-        if (success)
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw))
         {
-            success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw);
-            if (success)
-            {
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3] = raw;
-            }
-            else
-            {
-                App_RuntimeNoteSensorAdc2ReadFail();
-            }
+            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3] =
+                App_AdcRollingMeanPush(
+                    &g_sensor_filters[APP_SENSOR_FILTER_NTC3], raw);
+            channel_valid[APP_SENSOR_FILTER_NTC3] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc2ReadFail();
         }
 
-        if (success)
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw))
         {
-            success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw);
-            if (success)
-            {
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2] = raw;
-            }
-            else
-            {
-                App_RuntimeNoteSensorAdc2ReadFail();
-            }
+            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2] =
+                App_AdcRollingMeanPush(
+                    &g_sensor_filters[APP_SENSOR_FILTER_NTC2], raw);
+            channel_valid[APP_SENSOR_FILTER_NTC2] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc2ReadFail();
         }
 
-        if (success)
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw))
         {
-            success = App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw);
-            if (success)
-            {
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1] = raw;
-            }
-            else
-            {
-                App_RuntimeNoteSensorAdc2ReadFail();
-            }
+            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1] =
+                App_AdcRollingMeanPush(
+                    &g_sensor_filters[APP_SENSOR_FILTER_NTC1], raw);
+            channel_valid[APP_SENSOR_FILTER_NTC1] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc2ReadFail();
         }
 
-        if (success)
+        AppSensorThermalInputs thermal_inputs = {
+            .battery_ntc_valid =
+                channel_valid[APP_SENSOR_FILTER_BATTERY_NTC],
+            .battery_voltage_valid =
+                channel_valid[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
+            .ntc1_valid = channel_valid[APP_SENSOR_FILTER_NTC1],
+            .ntc2_valid = channel_valid[APP_SENSOR_FILTER_NTC2],
+            .ntc3_valid = channel_valid[APP_SENSOR_FILTER_NTC3],
+            .ntc1_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(
+                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1])),
+            .ntc2_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(
+                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2])),
+            .ntc3_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(
+                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3])),
+        };
+        AppThermalTransition thermal_transition =
+            App_SensorThermalGuardUpdate(&g_sensor_thermal_guard,
+                                         &thermal_inputs);
+        App_TaskSafetyHandleThermalTransition(
+            thermal_transition,
+            &g_sensor_safety_callbacks);
+        if ((thermal_transition == APP_THERMAL_NO_CHANGE)
+            && g_sensor_thermal_guard.active)
         {
-            success = App_AdcRollingMeanPushCycle(
-                g_sensor_filters,
-                g_sensor_cycle_samples,
-                APP_ADC_ROLLING_CHANNEL_COUNT,
-                g_sensor_cycle_means);
+            /* A transient mutex conflict must not leave the shared latch
+             * false after the original stop requests have been sent. */
+            (void)App_StateSetThermalProtectionActive(true);
         }
 
-        if (success)
+        bool snapshot_valid = true;
+        for (size_t index = 0U;
+             index < APP_ADC_ROLLING_CHANNEL_COUNT;
+             ++index)
+        {
+            snapshot_valid = snapshot_valid && channel_valid[index];
+        }
+
+        if (snapshot_valid)
         {
             App_SensorUpdateMeasure(
                 &next_snapshot.battery_ntc,
@@ -348,22 +380,6 @@ void App_SensorTask(void *argument)
                 &next_snapshot.ntc3,
                 g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3],
                 App_SensorConvertNtcTemperature);
-
-            AppThermalTransition thermal_transition = App_ThermalGuardUpdate(
-                &g_sensor_thermal_guard,
-                next_snapshot.ntc1.physical_value,
-                next_snapshot.ntc2.physical_value,
-                next_snapshot.ntc3.physical_value);
-            App_TaskSafetyHandleThermalTransition(
-                thermal_transition,
-                &g_sensor_safety_callbacks);
-            if ((thermal_transition == APP_THERMAL_NO_CHANGE)
-                && g_sensor_thermal_guard.active)
-            {
-                /* A transient mutex conflict must not leave the shared latch
-                 * false after the original stop requests have been sent. */
-                (void)App_StateSetThermalProtectionActive(true);
-            }
 
             /* DRV8874 IPROPI 电流快照：仅当电机在 FWD/REV 时取 mA→dA 转换；
              * 其他模式 (SLEEP/WAKE/BRAKE/STOP/UNKNOWN) 一律写 0，
