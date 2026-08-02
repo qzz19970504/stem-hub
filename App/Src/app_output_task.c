@@ -1,9 +1,11 @@
 #include "app_output.h"
 
 #include "app_charge_cycle.h"
+#include "app_config.h"
 #include "app_power_path.h"
 #include "app_runtime.h"
 #include "app_state.h"
+#include "app_task_safety.h"
 
 bool App_OutputEnqueueState(AppOutputTarget target, bool enabled)
 {
@@ -31,6 +33,16 @@ bool App_OutputEnqueuePowerMode(AppPowerMode mode)
     };
 
     return osMessageQueuePut(g_app_runtime.output_queue, &request, 0U, 0U) == osOK;
+}
+
+bool App_OutputEnqueueThermalStop(void)
+{
+    AppOutputRequest request = {.type = APP_OUTPUT_REQUEST_THERMAL_STOP};
+
+    return osMessageQueuePut(g_app_runtime.output_queue,
+                             &request,
+                             1U,
+                             osWaitForever) == osOK;
 }
 
 static void App_OutputApplyTarget(AppOutputTarget target, bool enabled)
@@ -66,13 +78,49 @@ static void App_OutputWritePowerPath(AppOutputTarget target,
     App_OutputApplyTarget(target, enabled);
 }
 
+static bool App_OutputPowerRequestAllowed(AppPowerMode mode);
+
 static void App_OutputApplyPowerAction(AppChargeCycleAction action)
 {
-    if (action.apply_mode)
+    if (action.apply_mode && App_OutputPowerRequestAllowed(action.mode))
     {
         (void)App_PowerPathApply(action.mode,
                                  App_OutputWritePowerPath,
                                  NULL);
+    }
+}
+
+static void App_OutputShutDownAuxiliaryOutputs(void)
+{
+    App_OutputApplyTarget(APP_OUTPUT_TARGET_NMOS1, false);
+    App_OutputApplyTarget(APP_OUTPUT_TARGET_NMOS2, false);
+}
+
+static bool App_OutputPowerRequestAllowed(AppPowerMode mode)
+{
+    bool thermal_active = false;
+    bool state_available = App_StateTryGetThermalProtectionActive(&thermal_active);
+    return App_TaskSafetyAllowsPower(state_available, thermal_active, mode);
+}
+
+static bool App_OutputStateRequestAllowed(bool enabled)
+{
+    bool thermal_active = false;
+    bool state_available = App_StateTryGetThermalProtectionActive(&thermal_active);
+    return App_TaskSafetyAllowsOutput(state_available, thermal_active, enabled);
+}
+
+static void App_OutputRefreshChargeConfiguration(AppChargeCycle *charge_cycle,
+                                                 uint32_t tick_frequency)
+{
+    uint32_t seconds;
+
+    if (App_StateTryGetChargeOnTimeSeconds(&seconds))
+    {
+        uint32_t on_ticks = App_ChargeCycleMillisecondsToTicks(
+            seconds * 1000U,
+            tick_frequency);
+        (void)App_ChargeCycleConfigureOnTicks(charge_cycle, on_ticks);
     }
 }
 
@@ -85,14 +133,22 @@ void App_NmosTask(void *argument)
     uint32_t wait_ticks;
     osStatus_t queue_status;
     uint32_t tick_frequency = osKernelGetTickFreq();
-    uint32_t charge_on_ticks =
-        App_ChargeCycleMillisecondsToTicks(APP_CHARGE_ON_TIME_MS, tick_frequency);
-    uint32_t charge_off_ticks =
-        App_ChargeCycleMillisecondsToTicks(APP_CHARGE_OFF_TIME_MS, tick_frequency);
+    uint32_t charge_on_seconds = APP_CHARGE_DEFAULT_ON_TIME_SECONDS;
+    uint32_t charge_cycle_ticks = App_ChargeCycleMillisecondsToTicks(
+        APP_CHARGE_CYCLE_TIME_SECONDS * 1000U,
+        tick_frequency);
+    uint32_t charge_on_ticks;
 
     (void)argument;
 
-    if (!App_ChargeCycleInit(&charge_cycle, charge_on_ticks, charge_off_ticks))
+    (void)App_StateTryGetChargeOnTimeSeconds(&charge_on_seconds);
+    charge_on_ticks = App_ChargeCycleMillisecondsToTicks(
+        charge_on_seconds * 1000U,
+        tick_frequency);
+
+    if (!App_ChargeCycleInit(&charge_cycle,
+                             charge_cycle_ticks,
+                             charge_on_ticks))
     {
         (void)App_PowerPathApply(APP_POWER_MODE_OFF,
                                  App_OutputWritePowerPath,
@@ -102,6 +158,7 @@ void App_NmosTask(void *argument)
 
     for (;;)
     {
+        App_OutputRefreshChargeConfiguration(&charge_cycle, tick_frequency);
         now_tick = osKernelGetTickCount();
         action = App_ChargeCyclePoll(&charge_cycle, now_tick);
         App_OutputApplyPowerAction(action);
@@ -123,17 +180,38 @@ void App_NmosTask(void *argument)
             continue;
         }
 
+        App_OutputRefreshChargeConfiguration(&charge_cycle, tick_frequency);
+
+        if (request.type == APP_OUTPUT_REQUEST_THERMAL_STOP)
+        {
+            action = App_ChargeCycleRequest(&charge_cycle,
+                                            APP_POWER_MODE_OFF,
+                                            osKernelGetTickCount());
+            App_OutputApplyPowerAction(action);
+            App_OutputShutDownAuxiliaryOutputs();
+            continue;
+        }
+
         if (request.type == APP_OUTPUT_REQUEST_SET_POWER_MODE)
         {
+            if (!App_OutputPowerRequestAllowed(request.data.power_mode))
+            {
+                continue;
+            }
             action = App_ChargeCycleRequest(&charge_cycle,
                                             request.data.power_mode,
                                             osKernelGetTickCount());
             App_OutputApplyPowerAction(action);
+            if (request.data.power_mode == APP_POWER_MODE_OFF)
+            {
+                App_OutputShutDownAuxiliaryOutputs();
+            }
             continue;
         }
 
         if ((request.type == APP_OUTPUT_REQUEST_SET_TARGET)
-            && App_OutputTargetAllowsDirectControl(request.data.target.target))
+            && App_OutputTargetAllowsDirectControl(request.data.target.target)
+            && App_OutputStateRequestAllowed(request.data.target.enabled))
         {
             App_OutputApplyTarget(request.data.target.target,
                                   request.data.target.enabled);

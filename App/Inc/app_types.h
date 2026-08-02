@@ -67,7 +67,8 @@ typedef enum
 typedef enum
 {
     APP_OUTPUT_REQUEST_SET_TARGET = 0,
-    APP_OUTPUT_REQUEST_SET_POWER_MODE
+    APP_OUTPUT_REQUEST_SET_POWER_MODE,
+    APP_OUTPUT_REQUEST_THERMAL_STOP
 } AppOutputRequestType;
 
 typedef struct

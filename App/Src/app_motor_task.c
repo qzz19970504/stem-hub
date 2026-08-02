@@ -3,6 +3,7 @@
 #include "app_config.h"
 #include "app_runtime.h"
 #include "app_state.h"
+#include "app_task_safety.h"
 
 static uint32_t App_MotorConvertCurrent(uint32_t millivolts)
 {
@@ -144,6 +145,16 @@ bool App_MotorEnqueueMode(AppMotorMode mode)
     return osMessageQueuePut(g_app_runtime.motor_queue, &request, 0U, 0U) == osOK;
 }
 
+bool App_MotorEnqueueThermalSleep(void)
+{
+    AppMotorRequest request = {.mode = APP_MOTOR_MODE_SLEEP};
+
+    return osMessageQueuePut(g_app_runtime.motor_queue,
+                             &request,
+                             1U,
+                             osWaitForever) == osOK;
+}
+
 bool App_MotorTryGetStatus(AppMotorStatus *status)
 {
     return App_StateTryGetMotorStatus(status);
@@ -161,7 +172,22 @@ void App_MotorTask(void *argument)
     {
         if (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, APP_MOTOR_MONITOR_PERIOD_MS) == osOK)
         {
-            App_MotorApplyMode(request.mode);
+            bool thermal_active = false;
+            bool state_available =
+                App_StateTryGetThermalProtectionActive(&thermal_active);
+            if (App_TaskSafetyAllowsMotor(state_available,
+                                          thermal_active,
+                                          request.mode))
+            {
+                App_MotorApplyMode(request.mode);
+            }
+        }
+
+        bool thermal_active = false;
+        if (!App_StateTryGetThermalProtectionActive(&thermal_active)
+            || thermal_active)
+        {
+            continue;
         }
 
         if (!App_MotorTryGetStatus(&snapshot))

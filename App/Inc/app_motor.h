@@ -8,6 +8,7 @@
 
 void App_MotorTask(void *argument);
 bool App_MotorEnqueueMode(AppMotorMode mode);
+bool App_MotorEnqueueThermalSleep(void);
 bool App_MotorTryGetStatus(AppMotorStatus *status);
 const char *App_MotorModeToString(AppMotorMode mode);
 

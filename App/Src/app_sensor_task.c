@@ -9,8 +9,11 @@
 #include "app_config.h"
 #include "app_motor.h"
 #include "app_ntc_table.h"
+#include "app_output.h"
 #include "app_runtime.h"
 #include "app_state.h"
+#include "app_task_safety.h"
+#include "app_thermal_guard.h"
 
 typedef enum
 {
@@ -27,6 +30,32 @@ static uint16_t
     g_sensor_cycle_samples[APP_ADC_ROLLING_CHANNEL_COUNT];
 static uint16_t
     g_sensor_cycle_means[APP_ADC_ROLLING_CHANNEL_COUNT];
+static AppThermalGuard g_sensor_thermal_guard;
+
+static bool App_SensorSetThermalState(bool active, void *context)
+{
+    (void)context;
+    return App_StateSetThermalProtectionActive(active);
+}
+
+static void App_SensorRequestOutputStop(void *context)
+{
+    (void)context;
+    (void)App_OutputEnqueueThermalStop();
+}
+
+static void App_SensorRequestMotorSleep(void *context)
+{
+    (void)context;
+    (void)App_MotorEnqueueThermalSleep();
+}
+
+static const AppTaskSafetyCallbacks g_sensor_safety_callbacks = {
+    .set_thermal_state = App_SensorSetThermalState,
+    .request_output_stop = App_SensorRequestOutputStop,
+    .request_motor_sleep = App_SensorRequestMotorSleep,
+    .context = NULL,
+};
 
 /* 电池 NTC 温度换算 (查表法):
  *  1) 拓扑 3V3 -- NTC -- Vadc -- 470Ω -- GND，先由 Vadc 反推 Rntc
@@ -218,6 +247,10 @@ void App_SensorTask(void *argument)
 
     (void)argument;
 
+    App_ThermalGuardInit(&g_sensor_thermal_guard,
+                         APP_THERMAL_TRIP_TEMPERATURE_DECI_C,
+                         APP_THERMAL_CLEAR_TEMPERATURE_DECI_C);
+
     for (;;)
     {
         App_RuntimeNoteSensorLoop();
@@ -315,6 +348,22 @@ void App_SensorTask(void *argument)
                 &next_snapshot.ntc3,
                 g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3],
                 App_SensorConvertNtcTemperature);
+
+            AppThermalTransition thermal_transition = App_ThermalGuardUpdate(
+                &g_sensor_thermal_guard,
+                next_snapshot.ntc1.physical_value,
+                next_snapshot.ntc2.physical_value,
+                next_snapshot.ntc3.physical_value);
+            App_TaskSafetyHandleThermalTransition(
+                thermal_transition,
+                &g_sensor_safety_callbacks);
+            if ((thermal_transition == APP_THERMAL_NO_CHANGE)
+                && g_sensor_thermal_guard.active)
+            {
+                /* A transient mutex conflict must not leave the shared latch
+                 * false after the original stop requests have been sent. */
+                (void)App_StateSetThermalProtectionActive(true);
+            }
 
             /* DRV8874 IPROPI 电流快照：仅当电机在 FWD/REV 时取 mA→dA 转换；
              * 其他模式 (SLEEP/WAKE/BRAKE/STOP/UNKNOWN) 一律写 0，
