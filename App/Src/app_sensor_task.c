@@ -28,6 +28,8 @@ typedef enum
 static AppAdcRollingMean
     g_sensor_filters[APP_ADC_ROLLING_CHANNEL_COUNT];
 static uint16_t
+    g_sensor_cycle_samples[APP_ADC_ROLLING_CHANNEL_COUNT];
+static uint16_t
     g_sensor_cycle_means[APP_ADC_ROLLING_CHANNEL_COUNT];
 static AppThermalGuard g_sensor_thermal_guard;
 
@@ -258,10 +260,7 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_4, &raw))
         {
-            g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_NTC] =
-                App_AdcRollingMeanPush(
-                    &g_sensor_filters[APP_SENSOR_FILTER_BATTERY_NTC],
-                    raw);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_NTC] = raw;
             channel_valid[APP_SENSOR_FILTER_BATTERY_NTC] = true;
         }
         else
@@ -271,10 +270,7 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_5, &raw))
         {
-            g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_VOLTAGE] =
-                App_AdcRollingMeanPush(
-                    &g_sensor_filters[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
-                    raw);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_BATTERY_VOLTAGE] = raw;
             channel_valid[APP_SENSOR_FILTER_BATTERY_VOLTAGE] = true;
         }
         else
@@ -284,9 +280,7 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw))
         {
-            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3] =
-                App_AdcRollingMeanPush(
-                    &g_sensor_filters[APP_SENSOR_FILTER_NTC3], raw);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3] = raw;
             channel_valid[APP_SENSOR_FILTER_NTC3] = true;
         }
         else
@@ -296,9 +290,7 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw))
         {
-            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2] =
-                App_AdcRollingMeanPush(
-                    &g_sensor_filters[APP_SENSOR_FILTER_NTC2], raw);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2] = raw;
             channel_valid[APP_SENSOR_FILTER_NTC2] = true;
         }
         else
@@ -308,9 +300,7 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw))
         {
-            g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1] =
-                App_AdcRollingMeanPush(
-                    &g_sensor_filters[APP_SENSOR_FILTER_NTC1], raw);
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1] = raw;
             channel_valid[APP_SENSOR_FILTER_NTC1] = true;
         }
         else
@@ -318,23 +308,56 @@ void App_SensorTask(void *argument)
             App_RuntimeNoteSensorAdc2ReadFail();
         }
 
+        bool all_channels_valid = true;
+        for (size_t index = 0U;
+             index < APP_ADC_ROLLING_CHANNEL_COUNT;
+             ++index)
+        {
+            all_channels_valid = all_channels_valid && channel_valid[index];
+        }
+        bool protected_channels_valid =
+            channel_valid[APP_SENSOR_FILTER_NTC1]
+            && channel_valid[APP_SENSOR_FILTER_NTC2]
+            && channel_valid[APP_SENSOR_FILTER_NTC3];
+        bool window_advanced = all_channels_valid
+            && App_AdcRollingMeanPushCycle(
+                g_sensor_filters,
+                g_sensor_cycle_samples,
+                APP_ADC_ROLLING_CHANNEL_COUNT,
+                g_sensor_cycle_means);
+        bool use_preview = !all_channels_valid && protected_channels_valid;
+        uint16_t ntc1_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1];
+        uint16_t ntc2_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2];
+        uint16_t ntc3_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3];
+
+        if (use_preview)
+        {
+            ntc1_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_NTC1],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1]);
+            ntc2_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_NTC2],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2]);
+            ntc3_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_NTC3],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3]);
+        }
+
+        bool thermal_samples_valid = window_advanced || use_preview;
         AppSensorThermalInputs thermal_inputs = {
             .battery_ntc_valid =
                 channel_valid[APP_SENSOR_FILTER_BATTERY_NTC],
             .battery_voltage_valid =
                 channel_valid[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
-            .ntc1_valid = channel_valid[APP_SENSOR_FILTER_NTC1],
-            .ntc2_valid = channel_valid[APP_SENSOR_FILTER_NTC2],
-            .ntc3_valid = channel_valid[APP_SENSOR_FILTER_NTC3],
+            .ntc1_valid = thermal_samples_valid,
+            .ntc2_valid = thermal_samples_valid,
+            .ntc3_valid = thermal_samples_valid,
             .ntc1_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(
-                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1])),
+                App_RuntimeRawToMillivolts(ntc1_mean)),
             .ntc2_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(
-                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2])),
+                App_RuntimeRawToMillivolts(ntc2_mean)),
             .ntc3_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(
-                    g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3])),
+                App_RuntimeRawToMillivolts(ntc3_mean)),
         };
         AppThermalTransition thermal_transition =
             App_SensorThermalGuardUpdate(&g_sensor_thermal_guard,
@@ -350,15 +373,7 @@ void App_SensorTask(void *argument)
             (void)App_StateSetThermalProtectionActive(true);
         }
 
-        bool snapshot_valid = true;
-        for (size_t index = 0U;
-             index < APP_ADC_ROLLING_CHANNEL_COUNT;
-             ++index)
-        {
-            snapshot_valid = snapshot_valid && channel_valid[index];
-        }
-
-        if (snapshot_valid)
+        if (window_advanced)
         {
             App_SensorUpdateMeasure(
                 &next_snapshot.battery_ntc,

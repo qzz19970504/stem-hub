@@ -19,6 +19,20 @@ uint16_t App_AdcRollingMeanPush(AppAdcRollingMean *filter, uint16_t sample)
     return (uint16_t)(filter->sum / filter->count);
 }
 
+uint16_t App_AdcRollingMeanPreview(const AppAdcRollingMean *filter,
+                                   uint16_t sample)
+{
+    AppAdcRollingMean preview;
+
+    if (filter == NULL)
+    {
+        return sample;
+    }
+
+    preview = *filter;
+    return App_AdcRollingMeanPush(&preview, sample);
+}
+
 bool App_AdcRollingMeanPushCycle(
     AppAdcRollingMean *filters,
     const uint16_t *samples,
