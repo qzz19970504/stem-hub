@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "app_adc_filter.h"
 
@@ -27,6 +28,10 @@ int main(void)
     assert(App_AdcRollingMeanPush(&filter, 700U) == 500U);
     assert(filter.sum == 2500U);
 
+    AppAdcRollingMean before_preview = filter;
+    assert(App_AdcRollingMeanPreview(&filter, 800U) == 600U);
+    assert(memcmp(&filter, &before_preview, sizeof(filter)) == 0);
+
     for (index = 0U; index < APP_ADC_ROLLING_WINDOW_SIZE; ++index)
     {
         assert(App_AdcRollingMeanPush(&maximum, 4095U) == 4095U);
@@ -50,6 +55,28 @@ int main(void)
     {
         assert(cycle_filters[index].count == 1U);
         assert(cycle_means[index] == complete_cycle[index]);
+    }
+
+    AppAdcRollingMean synchronized_before[APP_ADC_ROLLING_CHANNEL_COUNT];
+    (void)memcpy(synchronized_before,
+                 cycle_filters,
+                 sizeof(synchronized_before));
+    assert(App_AdcRollingMeanPreview(&cycle_filters[2], 700U) == 500U);
+    assert(memcmp(cycle_filters,
+                  synchronized_before,
+                  sizeof(synchronized_before)) == 0);
+
+    const uint16_t next_complete_cycle[] = {200U, 300U, 400U, 500U, 600U};
+    assert(App_AdcRollingMeanPushCycle(cycle_filters,
+                                       next_complete_cycle,
+                                       APP_ADC_ROLLING_CHANNEL_COUNT,
+                                       cycle_means));
+    for (index = 0U; index < APP_ADC_ROLLING_CHANNEL_COUNT; ++index)
+    {
+        assert(cycle_filters[index].count == 2U);
+        assert(cycle_means[index]
+               == (uint16_t)((complete_cycle[index]
+                              + next_complete_cycle[index]) / 2U));
     }
 
     return 0;

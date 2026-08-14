@@ -2,8 +2,8 @@
 
 本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
 
-> 适用固件：`release-v3.1`
-> 更新方式：在 v3.0 文档基础上更新 LM51770 间歇充电语义。
+> 适用固件：测试分支 `codex/test-thermal-charge-time`，握手版本仍为 `release-v3.1`
+> 更新方式：在 v3.1 协议上增加 MCU 侧充电时间配置和 NTC 软件过温停机；上位机代码、UI、fake firmware 与握手逻辑未修改。
 
 ## 1. 文档范围
 
@@ -19,6 +19,8 @@
 - 电机模式控制与状态查询
 - NMOS1、NMOS2 控制
 - MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
+- 60 秒周期内的充电开启时间设置与查询
+- NTC1/NTC2/NTC3 软件过温停机
 - 传感采样结果查询
 - nFAULT、nFLT 状态查询
 
@@ -145,6 +147,7 @@ ERROR:PARSE
 ERROR:SENSE_NOT_READY
 ERROR:LINE_TOO_LONG
 ERROR:STATE_BUSY
+ERROR:OVER_TEMPERATURE
 ERROR:LED_QUEUE
 ERROR:MOTOR_QUEUE
 ERROR:OUTPUT_QUEUE
@@ -159,7 +162,8 @@ ERROR:UNSUPPORTED
 - ERROR:PARSE：格式合法但内容不匹配当前支持的命令集
 - ERROR:SENSE_NOT_READY：传感任务尚未完成第一次有效采样
 - ERROR:LINE_TOO_LONG：一行数据超出内部缓存限制
-- ERROR:STATE_BUSY：读取状态时互斥资源暂不可用
+- ERROR:STATE_BUSY：共享保护状态或 RAM 配置的互斥资源暂不可用；危险开启命令在保护状态未知时不会放行
+- ERROR:OVER_TEMPERATURE：NTC 过温保护已锁存，当前命令试图开启充电、驱动、NMOS1/2 或非 SLEEP 电机模式
 - ERROR:LED_QUEUE：LED 控制消息入队失败
 - ERROR:MOTOR_QUEUE：电机控制消息入队失败
 - ERROR:OUTPUT_QUEUE：NMOS 或完整电源模式控制消息入队失败
@@ -194,11 +198,12 @@ ERROR:UNSUPPORTED
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
-| 电源路径 | AT+CHARGE=ON\r\n | 启动固定 10 秒开 / 50 秒关的 LM51770 充电循环 | OK |
+| 电源路径 | AT+CHARGE=ON\r\n | 启动 60 秒周期的 LM51770 充电循环；默认 10 秒开 / 50 秒关 | OK |
 | 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
 | 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 电源路径 | AT+POWER=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
+| 充电配置 | AT+CHARGE_TIME=&lt;n&gt;\r\n | 设置每个周期的 ON 秒数，`n` 为 1～60 | OK |
 
 ### 4.2 查询类命令
 
@@ -208,6 +213,7 @@ ERROR:UNSUPPORTED
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 诊断 | AT+DIAG?\r\n | 查询控制链路、TX、传感任务及 UART2/UART3 RX 计数器 |
+| 充电配置 | AT+CHARGE_TIME=?\r\n | 查询 RAM 内当前配置；返回 `+CHARGE_TIME:<n>` 后跟 `OK` |
 | 版本 | AT+VERSION?\r\n | 查询固件版本号，用于握手 |
 
 ### 4.3 兼容写法
@@ -445,15 +451,40 @@ AT+POWER=OFF
 
 - LM51770（PB3 EN/UVLO）与 MP4317（PA8）均为低电平使能。
 - 固件只允许三种物理状态：两路全关、仅 LM51770 开、仅 MP4317 开。
-- `AT+CHARGE=ON` 启动固定循环：先把 PB3、PA8 都置为关断电平，再仅拉低 PB3 10 秒，随后两路全关 50 秒，然后重复。
-- 在 10 秒开启段或 50 秒关闭段重复发送 `AT+CHARGE=ON` 都不会重置当前阶段的截止时间。
+- `AT+CHARGE=ON` 启动固定 60 秒周期：先把 PB3、PA8 都置为关断电平，再仅拉低 PB3 `n` 秒，随后两路全关 `60-n` 秒，然后重复；`n` 默认是 10。
+- 在任一开启段或关闭段重复发送 `AT+CHARGE=ON` 都不会重置当前阶段的截止时间。
 - CHARGE 成功回包表示循环请求已入队；上位机 CHARGE 开关表示循环已启用，不表示 PB3 此刻必为开启电平。
 - `AT+DRIVE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PA8。
 - `AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 都立即取消充电循环并关闭两路；`AT+DRIVE=ON` 也会立即取消循环并进入驱动状态。
 - MCU 复位后保持两路全关，不自动恢复充电循环。
 - 旧的 `AT+LM51770=ON/OFF` 与 `AT+MP4317=ON/OFF` 已删除，不能绕过 MCU 互锁。
 
-安全边界：10/50 秒循环仅为临时降额措施，不使用 NTC，也没有充电电流、累计充电时长或自动故障锁存保护。它不构成器件安全保证；查明实际充电电流和损坏原因前，不应进行无人值守满功率带载测试。
+#### 5.4.3 充电时间设置与查询
+
+```text
+AT+CHARGE_TIME=25
+OK
+
+AT+CHARGE_TIME=?
++CHARGE_TIME:25
+OK
+```
+
+- `n` 只接受十进制整数 1～60；0、61、负数、小数、空值或额外字符返回 `ERROR:PARSE`。
+- 周期固定为 60 秒，默认 10 秒 ON / 50 秒 OFF。配置只保存在 RAM，MCU 复位后恢复默认 10。
+- 运行中设置新值会立即改变查询结果，但不修改当前相位和绝对截止时间；从下一次 ON 相位开始，整个新周期使用新配置。
+- `n=60` 表示连续 ON。内部仍以 60 秒为周期边界接收后续配置，但边界处不会切换 EN，因此不会每分钟重新软启动 LM51770。
+- CHARGE 开关表示间歇循环已启用，不表示 EN 在查询时刻必然开启。
+
+#### 5.4.4 NTC 软件过温停机
+
+- 判断只使用 NTC1/NTC2/NTC3，不使用当前未焊接的 BATT_NTC。五路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整成功采样周期的平均值，所以保护可能有最多约数秒的响应延迟。若只有电池通道读取失败，保护使用正式同步窗口加本周期 NTC 样本得到的只读预览均值，不推进或发布 SENSE 窗口。
+- 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、让电机进入 SLEEP；LED 不变。
+- 高优先级停机消息之外，输出和电机消费者每 100 ms 自检一次，保护期间不会执行旧队列里的开启命令。
+- 三路必须全部有效且都不高于 55.0°C 才解除锁存。解除后需要上位机重新发送开启命令，固件不会自动恢复停机前状态。
+- 保护期间允许关闭类命令、`AT+MOTOR=SLEEP`、所有查询和 `CHARGE_TIME` 设置/查询；危险开启命令返回 `ERROR:OVER_TEMPERATURE`。没有新增温度状态查询或阈值调参 AT 指令。
+
+安全边界：可调占空和 NTC 停机都是测试分支的软件降额保护，不包含充电电流、累计充电时长或硬件故障锁存，也不能替代硬件限流、功率器件选型和散热设计。查明实际电流和损坏原因前，禁止无人值守满功率带载。
 
 ### 5.5 传感查询命令
 
@@ -641,6 +672,7 @@ OK
 - `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
 - 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
 - v3.1 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
+- 本测试分支仍返回 `release-v3.1`，现有上位机握手保持兼容；上位机没有同步增加 `CHARGE_TIME` UI，联调该命令需直接使用串口 AT 接口。
 - v2.2 相比 v2.1 新增的 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段在 v3.0 中继续保留。
 - 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道，v2.2 上位机也不能假定独立电源芯片指令仍有效。
 

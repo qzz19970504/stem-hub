@@ -7,8 +7,10 @@ typedef struct
     AppSensorSnapshot sensor_snapshot;
     AppMotorStatus motor_status;
     AppIoStatus io_status;
+    uint32_t charge_on_time_seconds;
     bool bridge_uart2_enabled;
     bool bridge_uart3_enabled;
+    bool thermal_protection_active;
 } AppState;
 
 static AppState g_app_state = {
@@ -25,8 +27,10 @@ static AppState g_app_state = {
         .uvlo_enabled = false,
         .mp4317_enabled = false,
     },
+    .charge_on_time_seconds = APP_CHARGE_DEFAULT_ON_TIME_SECONDS,
     .bridge_uart2_enabled = false,
     .bridge_uart3_enabled = false,
+    .thermal_protection_active = false,
 };
 
 void App_StateSetBridgeEnabled(AppBridgeTarget target, bool enabled)
@@ -196,4 +200,68 @@ void App_StateSetOutputEnabled(AppOutputTarget target, bool enabled)
     }
 
     (void)osMutexRelease(g_app_runtime.state_mutex);
+}
+
+bool App_StateSetChargeOnTimeSeconds(uint32_t seconds)
+{
+    if ((seconds < APP_CHARGE_MIN_ON_TIME_SECONDS)
+        || (seconds > APP_CHARGE_MAX_ON_TIME_SECONDS))
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    g_app_state.charge_on_time_seconds = seconds;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
+}
+
+bool App_StateTryGetChargeOnTimeSeconds(uint32_t *seconds)
+{
+    if (seconds == NULL)
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    *seconds = g_app_state.charge_on_time_seconds;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
+}
+
+bool App_StateSetThermalProtectionActive(bool active)
+{
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    g_app_state.thermal_protection_active = active;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
+}
+
+bool App_StateTryGetThermalProtectionActive(bool *active)
+{
+    if (active == NULL)
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    *active = g_app_state.thermal_protection_active;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
 }

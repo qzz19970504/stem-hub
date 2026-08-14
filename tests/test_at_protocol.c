@@ -34,6 +34,35 @@ static void expect_power_command(const char *line, AppPowerMode expected_mode)
     assert(command.data.power.mode == expected_mode);
 }
 
+static void expect_charge_time_command(const char *line, uint32_t expected_seconds)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SET_CHARGE_TIME);
+    assert(command.data.charge_time.seconds == expected_seconds);
+}
+
+static void build_maximum_length_charge_time_line(char *line, const char *value)
+{
+    static const char prefix[] = "AT+CHARGE_TIME=";
+    static const char terminator[] = "\r\n";
+    size_t prefix_length = strlen(prefix);
+    size_t value_length = strlen(value);
+    size_t leading_zero_count = APP_AT_PROTOCOL_MAX_LINE_LENGTH
+        - 1U
+        - prefix_length
+        - value_length
+        - strlen(terminator);
+
+    memcpy(line, prefix, prefix_length);
+    memset(line + prefix_length, '0', leading_zero_count);
+    memcpy(line + prefix_length + leading_zero_count, value, value_length);
+    memcpy(line + prefix_length + leading_zero_count + value_length,
+           terminator,
+           sizeof(terminator));
+}
+
 static void expect_uart_payload(const char *line,
                                 const uint8_t *expected_payload,
                                 size_t expected_length)
@@ -49,6 +78,8 @@ static void expect_uart_payload(const char *line,
 int main(void)
 {
     AppAtCommand command = {0};
+    char maximum_length_charge_time_60[APP_AT_PROTOCOL_MAX_LINE_LENGTH];
+    char maximum_length_charge_time_61[APP_AT_PROTOCOL_MAX_LINE_LENGTH];
     static const uint8_t binary_payload[] = {0x00U, 0xFFU, 0x10U};
     static const uint8_t maximum_payload[32] = {
         0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U,
@@ -78,6 +109,24 @@ int main(void)
     expect_power_command("AT+DRIVE=ON\r\n", APP_POWER_MODE_DRIVE);
     expect_power_command("AT+DRIVE=OFF\r\n", APP_POWER_MODE_OFF);
     expect_power_command("AT+POWER=OFF\r\n", APP_POWER_MODE_OFF);
+
+    expect_charge_time_command("AT+CHARGE_TIME=1\r\n", 1U);
+    expect_charge_time_command("AT+CHARGE_TIME=10\r\n", 10U);
+    expect_charge_time_command("AT+CHARGE_TIME=60\r\n", 60U);
+    expect_query_command("AT+CHARGE_TIME=?\r\n", APP_AT_COMMAND_QUERY_CHARGE_TIME);
+
+    build_maximum_length_charge_time_line(maximum_length_charge_time_60, "60");
+    expect_charge_time_command(maximum_length_charge_time_60, 60U);
+    build_maximum_length_charge_time_line(maximum_length_charge_time_61, "61");
+    assert(!AppAtProtocol_Parse(maximum_length_charge_time_61, &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=12345678901234567890\r\n", &command));
+
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=0\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=61\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=-1\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=1.5\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_TIME=10X\r\n", &command));
 
     assert(!AppAtProtocol_Parse("AT+LM51770=ON\r\n", &command));
     assert(!AppAtProtocol_Parse("AT+LM51770=OFF\r\n", &command));

@@ -2,7 +2,7 @@
 
 基于 STM32F103C8T6 和 FreeRTOS 的嵌入式控制项目，当前聚焦于多路 ADC 采集、DRV8874 电机驱动、UART AT 指令控制，以及 UART1 与 UART2/UART3 之间的可控双向二进制隧道。
 
-当前固件版本为 `release-v3.1`。v3.1 保留 MCU 强制互斥的充电、驱动、全关三种电源状态和五路 1 Hz 传感 ADC 的五周期滑动平均，并将充电改为固定 10 秒开启、50 秒关闭的自动循环。
+当前固件版本仍为 `release-v3.1`。`codex/test-thermal-charge-time` 是 MCU 测试分支：在不改变上位机 v3.1 握手的前提下，增加 RAM 内可调的 60 秒充电占空时间，以及由 NTC1/NTC2/NTC3 驱动的过温停机保护。上位机仓库、UI 和 fake firmware 均未修改。
 
 ## 快速开始
 
@@ -74,7 +74,7 @@
 - nFAULT 和 nFLT 目前只支持 GPIO 读取和查询，没有完整故障恢复流程。
 - 没有提供下载、烧录、量产参数配置脚本。
 - 没有引入 DMA 串口接收或 ADC DMA 扫描，当前实现以简单、稳定、容易维护为优先。
-- v3.1 的 10 秒开 / 50 秒关只是一项临时降额措施，不包含 NTC、充电电流、累计充电时长或故障锁存保护，也不能保证 LM51770 或外部功率器件安全。带载前仍必须核查实际充电电流、MOSFET、电感饱和、限流设定和散热设计。
+- 测试分支的默认充电周期仍为 10 秒开 / 50 秒关，并增加 NTC1/2/3 软件过温停机；这仍只是一项试验性降额保护，不包含充电电流、累计充电时长、自动故障锁存或硬件级保护，也不能保证 LM51770 或外部功率器件安全。禁止无人值守带载，带载前仍必须核查实际充电电流、MOSFET、电感饱和、限流设定和散热设计。
 
 ## 先决条件
 
@@ -199,11 +199,12 @@ at+led=on\r\n
 | AT+NMOS1=OFF | 关闭 NMOS1 |
 | AT+NMOS2=ON | 打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
-| AT+CHARGE=ON | 启动 LM51770 固定 10 秒开 / 50 秒关的充电循环 |
+| AT+CHARGE=ON | 启动 LM51770 的 60 秒间歇充电循环；默认 10 秒开 / 50 秒关 |
 | AT+CHARGE=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+DRIVE=ON | 先关闭 LM51770 与 MP4317，再仅打开 MP4317 |
 | AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+POWER=OFF | 同时关闭 LM51770 与 MP4317 |
+| AT+CHARGE_TIME=&lt;n&gt; | 设置每个 60 秒周期的充电开启时间，`n` 为 1～60 秒 |
 
 #### 查询类
 
@@ -213,6 +214,7 @@ at+led=on\r\n
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
+| AT+CHARGE_TIME=? | 查询当前 RAM 内充电开启时间 | +CHARGE_TIME:10 |
 | AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.1 |
 
 控制类命令成功时返回：
@@ -228,7 +230,19 @@ ERROR
 ERROR:PARSE
 ERROR:SENSE_NOT_READY
 ERROR:LINE_TOO_LONG
+ERROR:STATE_BUSY
+ERROR:OVER_TEMPERATURE
 ```
+
+`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。
+
+### 测试分支的充电时间语义
+
+- `AT+CHARGE_TIME=n` 只接受十进制整数 1～60，成功返回 `OK`；`AT+CHARGE_TIME=?` 精确返回 `+CHARGE_TIME:<n>\r\nOK\r\n`。
+- 周期固定为 60 秒，ON 为 `n` 秒，OFF 为 `60-n` 秒；默认 `n=10`。配置只存 RAM，MCU 复位后恢复 10 秒开 / 50 秒关。
+- 运行中设置新值不会修改当前 ON/OFF 相位或绝对截止时间；从下一次 ON 相位开始，整个新周期使用新值。
+- `n=60` 表示连续开启。调度器仍在内部经过 60 秒周期边界以接收待生效配置，但边界处不切换 LM51770 EN，避免重复软启动。
+- `AT+CHARGE=ON` 的成功回包表示循环请求已接受；上位机 CHARGE 开关表示循环已启用，不表示 LM51770 EN 此刻必然处于 ON 相位。
 
 ### v2.2 双向 UART 隧道
 
@@ -282,6 +296,14 @@ OK\r\n
 - 只有五路 ADC 在同一采样周期全部读取成功时，BATT_NTC、BATT_V、NTC1、NTC2、NTC3 的静态环形窗口才同步推进；每路使用最近五个完整成功周期的原始值求均值后再换算物理量，启动前四个完整周期按已有样本数求均值。
 - 五个窗口使用静态 RAM 和 `uint32_t` 运行和，不在 sensorTask 栈上分配快照数组；单路最大和仅为 `5 × 4095 = 20475`。
 - 电机 `MOTOR_I` 参与过流保护，因此不使用五周期均值，继续保留即时采样语义。
+
+### 测试分支的 NTC 过温停机
+
+- 保护只使用 NTC1、NTC2、NTC3；当前硬件未焊接的 BATT_NTC 不参与判断。五路采样全部成功时，判断输入与 `AT+SENSE?` 显示一致，均为最近五个完整成功采样周期的平均结果，因此可能产生最多约数秒的响应延迟。若只有电池通道读取失败，保护会用正式同步窗口加本周期 NTC 样本计算只读预览均值，不推进或发布 SENSE 窗口。
+- 任一路严格高于 60.0°C、温度转换无效，或受保护 NTC 的 ADC 读取失败，都会锁存过温保护。触发后取消 CHARGE/DRIVE，关闭 LM51770、MP4317、NMOS1、NMOS2，并让电机进入 SLEEP；LED 保持原状态。
+- 停机请求通过高优先级队列发送，输出任务和电机任务还会每 100 ms 复查保护状态，阻止停机前已排队的旧开启命令重新打开输出。
+- 只有 NTC1/2/3 三路读数都有效且全部不高于 55.0°C 才解除锁存。解除后仅重新允许人工命令，不自动恢复停机前的充电、驱动、NMOS 或电机状态。
+- 保护期间仍允许 OFF、MOTOR SLEEP、查询以及 `CHARGE_TIME` 设置/查询；CHARGE、DRIVE、NMOS1/2 ON 和非 SLEEP 电机模式返回 `ERROR:OVER_TEMPERATURE`。本分支没有新增温度查询或运行时温度阈值调参指令。
 
 ### 电机控制说明
 

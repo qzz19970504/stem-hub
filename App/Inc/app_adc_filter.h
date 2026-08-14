@@ -17,6 +17,8 @@ typedef struct
 } AppAdcRollingMean;
 
 uint16_t App_AdcRollingMeanPush(AppAdcRollingMean *filter, uint16_t sample);
+uint16_t App_AdcRollingMeanPreview(const AppAdcRollingMean *filter,
+                                   uint16_t sample);
 bool App_AdcRollingMeanPushCycle(
     AppAdcRollingMean *filters,
     const uint16_t *samples,

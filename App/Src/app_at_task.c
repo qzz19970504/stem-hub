@@ -9,6 +9,7 @@
 #include "task.h"
 
 #include "app_at_protocol.h"
+#include "app_at_command_guard.h"
 #include "app_config.h"
 #include "app_led.h"
 #include "app_motor.h"
@@ -285,13 +286,54 @@ static void App_AtReplyDiag(void)
     App_RuntimeSendOk();
 }
 
+static void App_AtReplyChargeTime(void)
+{
+    char buffer[48];
+    uint32_t seconds = 0U;
+
+    if (!App_StateTryGetChargeOnTimeSeconds(&seconds))
+    {
+        App_RuntimeSendError("STATE_BUSY");
+        return;
+    }
+
+    (void)snprintf(buffer,
+                   sizeof(buffer),
+                   "+CHARGE_TIME:%lu\r\nOK\r\n",
+                   (unsigned long)seconds);
+    App_RuntimeSendText(&huart1, buffer);
+}
+
 static void App_AtHandleCommand(const AppAtCommand *command)
 {
     bool queued = false;
+    bool thermal_protection_active = false;
+    bool thermal_state_available = false;
+    AppAtCommandGuardResult guard_result;
 
     if (command == NULL)
     {
         App_RuntimeSendError("BAD_COMMAND");
+        return;
+    }
+
+    guard_result = App_AtCommandGuardEvaluate(command, false, false);
+    if (guard_result == APP_AT_COMMAND_GUARD_STATE_BUSY)
+    {
+        thermal_state_available = App_StateTryGetThermalProtectionActive(
+            &thermal_protection_active);
+        guard_result = App_AtCommandGuardEvaluate(command,
+                                                   thermal_state_available,
+                                                   thermal_protection_active);
+    }
+    if (guard_result == APP_AT_COMMAND_GUARD_STATE_BUSY)
+    {
+        App_RuntimeSendError("STATE_BUSY");
+        return;
+    }
+    if (guard_result == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE)
+    {
+        App_RuntimeSendError("OVER_TEMPERATURE");
         return;
     }
 
@@ -334,6 +376,11 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         queued = App_OutputEnqueuePowerMode(command->data.power.mode);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
+    case APP_AT_COMMAND_SET_CHARGE_TIME:
+        App_StateSetChargeOnTimeSeconds(command->data.charge_time.seconds)
+            ? App_RuntimeSendOk()
+            : App_RuntimeSendError("STATE_BUSY");
+        break;
     case APP_AT_COMMAND_SEND_UART:
         App_AtSendUartPayload(&command->data.uart_payload);
         break;
@@ -351,6 +398,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         break;
     case APP_AT_COMMAND_QUERY_VERSION:
         App_AtReplyVersion();
+        break;
+    case APP_AT_COMMAND_QUERY_CHARGE_TIME:
+        App_AtReplyChargeTime();
         break;
     default:
         App_RuntimeSendError("UNSUPPORTED");
