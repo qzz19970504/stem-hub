@@ -114,15 +114,18 @@ static int App_AtFormatTempCenti(char *out, size_t out_size, int32_t centi_c)
 
 static void App_AtReplySense(void)
 {
-    char buffer[320];
+    char buffer[384];
     AppSensorSnapshot snapshot;
     long batt_mv = 0L;
     unsigned long batt_v_int = 0UL;
     unsigned long batt_v_dec = 0UL;
     char batt_ntc_str[8];
-    char ntc1_str[8];
-    char ntc2_str[8];
-    char ntc3_str[8];
+    char mcu_str[8];
+    char lm51770_str[8];
+    char mp4317_str[8];
+    char drv8874_str[8];
+    char charge_mos_str[8];
+    int response_length;
 
     /* 高水位 (HighWaterMark) 单位 = StackType_t word (4 B)。
      * 在 SENSE 行尾追加 STK_AT/STK_SENSOR/STK_MOTOR，便于上位机被动采样，
@@ -152,12 +155,26 @@ static void App_AtReplySense(void)
     batt_v_int = (unsigned long)batt_mv / 1000UL;
     batt_v_dec = ((unsigned long)batt_mv % 1000UL + 50UL) / 100UL;
 
-    /* BATT_NTC/NTC1/2/3 physical_value 是 0.1°C 的有符号整数，由各自
-     * 的 App_SensorConvertBatteryNtc / App_SensorConvertNtcTemperature 算出。*/
+    /* 所有温度 physical_value 都是 0.1°C 的有符号整数。 */
     (void)App_AtFormatTempCenti(batt_ntc_str, sizeof(batt_ntc_str), snapshot.battery_ntc.physical_value);
-    (void)App_AtFormatTempCenti(ntc1_str, sizeof(ntc1_str), snapshot.ntc1.physical_value);
-    (void)App_AtFormatTempCenti(ntc2_str, sizeof(ntc2_str), snapshot.ntc2.physical_value);
-    (void)App_AtFormatTempCenti(ntc3_str, sizeof(ntc3_str), snapshot.ntc3.physical_value);
+    (void)App_AtFormatTempCenti(
+        mcu_str, sizeof(mcu_str), snapshot.mcu_temperature.physical_value);
+    (void)App_AtFormatTempCenti(
+        lm51770_str,
+        sizeof(lm51770_str),
+        snapshot.lm51770_temperature.physical_value);
+    (void)App_AtFormatTempCenti(
+        mp4317_str,
+        sizeof(mp4317_str),
+        snapshot.mp4317_temperature.physical_value);
+    (void)App_AtFormatTempCenti(
+        drv8874_str,
+        sizeof(drv8874_str),
+        snapshot.drv8874_temperature.physical_value);
+    (void)App_AtFormatTempCenti(
+        charge_mos_str,
+        sizeof(charge_mos_str),
+        snapshot.charge_mos_temperature.physical_value);
 
     /* TX 状态机快照（HAL_StatusTypeDef 数值：0=OK,1=ERROR,2=BUSY,3=TIMEOUT）。
      * 通过 AT+SENSE? 尾随字段暴露最近一次发送前的 huart->gState 与返回值，
@@ -166,24 +183,32 @@ static void App_AtReplySense(void)
     AppRuntimeDiag tail_diag;
     App_RuntimeGetDiag(&tail_diag);
 
-    (void)snprintf(buffer,
-                   sizeof(buffer),
-                   "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,NTC1_C=%s,NTC2_C=%s,NTC3_C=%s,MOTOR_I=%lu.%luA,TICK=%lu,COUNT=%lu,STK_AT=%lu,STK_SENSOR=%lu,STK_MOTOR=%lu,TX_SP=%lu,TX_LS=%lu\r\nOK\r\n",
-                   batt_ntc_str,
-                   batt_v_int,
-                   batt_v_dec,
-                   ntc1_str,
-                   ntc2_str,
-                   ntc3_str,
-                   (unsigned long)(snapshot.motor_current_a_deci / 10UL),
-                   (unsigned long)(snapshot.motor_current_a_deci % 10UL),
-                   (unsigned long)snapshot.sample_tick,
-                   (unsigned long)snapshot.sample_counter,
-                   (unsigned long)stk_at,
-                   (unsigned long)stk_sensor,
-                   (unsigned long)stk_motor,
-                   (unsigned long)tail_diag.tx_state_pre,
-                   (unsigned long)tail_diag.tx_last_status);
+    response_length = snprintf(
+        buffer,
+        sizeof(buffer),
+        "+SENSE:BATT_NTC=%s,BATT_V=%lu.%luV,MCU_C=%s,LM51770_C=%s,MP4317_C=%s,DRV8874_C=%s,CHARGE_MOS_C=%s,MOTOR_I=%lu.%luA,TICK=%lu,COUNT=%lu,STK_AT=%lu,STK_SENSOR=%lu,STK_MOTOR=%lu,TX_SP=%lu,TX_LS=%lu\r\nOK\r\n",
+        batt_ntc_str,
+        batt_v_int,
+        batt_v_dec,
+        mcu_str,
+        lm51770_str,
+        mp4317_str,
+        drv8874_str,
+        charge_mos_str,
+        (unsigned long)(snapshot.motor_current_a_deci / 10UL),
+        (unsigned long)(snapshot.motor_current_a_deci % 10UL),
+        (unsigned long)snapshot.sample_tick,
+        (unsigned long)snapshot.sample_counter,
+        (unsigned long)stk_at,
+        (unsigned long)stk_sensor,
+        (unsigned long)stk_motor,
+        (unsigned long)tail_diag.tx_state_pre,
+        (unsigned long)tail_diag.tx_last_status);
+    if ((response_length < 0) || ((size_t)response_length >= sizeof(buffer)))
+    {
+        App_RuntimeSendError("RESPONSE_TOO_LONG");
+        return;
+    }
     App_RuntimeSendText(&huart1, buffer);
 }
 

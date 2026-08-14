@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define APP_ADC_ROLLING_WINDOW_SIZE 5U
-#define APP_ADC_ROLLING_CHANNEL_COUNT 5U
+#define APP_ADC_ROLLING_CHANNEL_COUNT 7U
 
 typedef struct
 {

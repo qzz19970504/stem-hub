@@ -20,9 +20,11 @@ typedef enum
 {
     APP_SENSOR_FILTER_BATTERY_NTC = 0,
     APP_SENSOR_FILTER_BATTERY_VOLTAGE,
-    APP_SENSOR_FILTER_NTC1,
-    APP_SENSOR_FILTER_NTC2,
-    APP_SENSOR_FILTER_NTC3
+    APP_SENSOR_FILTER_MCU_TEMPERATURE,
+    APP_SENSOR_FILTER_LM51770_TEMPERATURE,
+    APP_SENSOR_FILTER_MP4317_TEMPERATURE,
+    APP_SENSOR_FILTER_DRV8874_TEMPERATURE,
+    APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE
 } AppSensorFilterIndex;
 
 static AppAdcRollingMean
@@ -66,7 +68,7 @@ static const AppTaskSafetyCallbacks g_sensor_safety_callbacks = {
  *    - Vadc == 0          (NTC 开路/虚焊): 钳位到 -550 (= -55.0°C, 表下限)
  *    - Vadc >= V_SUPPLY   (NTC 短路):      返回 INT32_MAX 表示异常
  *    - Rntc 超出表范围   : 钳位到表上下限
- *  备注: 电池 NTC 型号与 NTC1_C/NTC2_C/NTC3_C 不同
+ *  备注: 电池 NTC 型号与五个受保护器件的 NTC 不同
  *        (本表 R25=10kΩ, B25/85=3435K, 范围 -55..+125°C, 表在 app_batt_ntc_table.h)，
  *        拓扑与 470Ω 串联电阻相同 (复用 APP_NTC_V_SUPPLY_MV / APP_NTC_R_SERIES_OHMS)。*/
 static int32_t App_SensorConvertBatteryNtc(uint32_t millivolts)
@@ -278,10 +280,10 @@ void App_SensorTask(void *argument)
             App_RuntimeNoteSensorAdc1ReadFail();
         }
 
-        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw))
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw))
         {
-            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3] = raw;
-            channel_valid[APP_SENSOR_FILTER_NTC3] = true;
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_MCU_TEMPERATURE] = raw;
+            channel_valid[APP_SENSOR_FILTER_MCU_TEMPERATURE] = true;
         }
         else
         {
@@ -290,22 +292,42 @@ void App_SensorTask(void *argument)
 
         if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_7, &raw))
         {
-            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2] = raw;
-            channel_valid[APP_SENSOR_FILTER_NTC2] = true;
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_LM51770_TEMPERATURE] = raw;
+            channel_valid[APP_SENSOR_FILTER_LM51770_TEMPERATURE] = true;
         }
         else
         {
             App_RuntimeNoteSensorAdc2ReadFail();
         }
 
-        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_9, &raw))
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_6, &raw))
         {
-            g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1] = raw;
-            channel_valid[APP_SENSOR_FILTER_NTC1] = true;
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_MP4317_TEMPERATURE] = raw;
+            channel_valid[APP_SENSOR_FILTER_MP4317_TEMPERATURE] = true;
         }
         else
         {
             App_RuntimeNoteSensorAdc2ReadFail();
+        }
+
+        if (App_RuntimeReadAdc2Channel(ADC_CHANNEL_1, &raw))
+        {
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_DRV8874_TEMPERATURE] = raw;
+            channel_valid[APP_SENSOR_FILTER_DRV8874_TEMPERATURE] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc2ReadFail();
+        }
+
+        if (App_RuntimeReadChannel(&hadc1, ADC_CHANNEL_0, &raw))
+        {
+            g_sensor_cycle_samples[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE] = raw;
+            channel_valid[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE] = true;
+        }
+        else
+        {
+            App_RuntimeNoteSensorAdc1ReadFail();
         }
 
         bool all_channels_valid = true;
@@ -316,9 +338,11 @@ void App_SensorTask(void *argument)
             all_channels_valid = all_channels_valid && channel_valid[index];
         }
         bool protected_channels_valid =
-            channel_valid[APP_SENSOR_FILTER_NTC1]
-            && channel_valid[APP_SENSOR_FILTER_NTC2]
-            && channel_valid[APP_SENSOR_FILTER_NTC3];
+            channel_valid[APP_SENSOR_FILTER_MCU_TEMPERATURE]
+            && channel_valid[APP_SENSOR_FILTER_LM51770_TEMPERATURE]
+            && channel_valid[APP_SENSOR_FILTER_MP4317_TEMPERATURE]
+            && channel_valid[APP_SENSOR_FILTER_DRV8874_TEMPERATURE]
+            && channel_valid[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE];
         bool window_advanced = all_channels_valid
             && App_AdcRollingMeanPushCycle(
                 g_sensor_filters,
@@ -326,21 +350,34 @@ void App_SensorTask(void *argument)
                 APP_ADC_ROLLING_CHANNEL_COUNT,
                 g_sensor_cycle_means);
         bool use_preview = !all_channels_valid && protected_channels_valid;
-        uint16_t ntc1_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1];
-        uint16_t ntc2_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2];
-        uint16_t ntc3_mean = g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3];
+        uint16_t mcu_mean =
+            g_sensor_cycle_means[APP_SENSOR_FILTER_MCU_TEMPERATURE];
+        uint16_t lm51770_mean =
+            g_sensor_cycle_means[APP_SENSOR_FILTER_LM51770_TEMPERATURE];
+        uint16_t mp4317_mean =
+            g_sensor_cycle_means[APP_SENSOR_FILTER_MP4317_TEMPERATURE];
+        uint16_t drv8874_mean =
+            g_sensor_cycle_means[APP_SENSOR_FILTER_DRV8874_TEMPERATURE];
+        uint16_t charge_mos_mean =
+            g_sensor_cycle_means[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE];
 
         if (use_preview)
         {
-            ntc1_mean = App_AdcRollingMeanPreview(
-                &g_sensor_filters[APP_SENSOR_FILTER_NTC1],
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC1]);
-            ntc2_mean = App_AdcRollingMeanPreview(
-                &g_sensor_filters[APP_SENSOR_FILTER_NTC2],
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC2]);
-            ntc3_mean = App_AdcRollingMeanPreview(
-                &g_sensor_filters[APP_SENSOR_FILTER_NTC3],
-                g_sensor_cycle_samples[APP_SENSOR_FILTER_NTC3]);
+            mcu_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_MCU_TEMPERATURE],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_MCU_TEMPERATURE]);
+            lm51770_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_LM51770_TEMPERATURE],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_LM51770_TEMPERATURE]);
+            mp4317_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_MP4317_TEMPERATURE],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_MP4317_TEMPERATURE]);
+            drv8874_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_DRV8874_TEMPERATURE],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_DRV8874_TEMPERATURE]);
+            charge_mos_mean = App_AdcRollingMeanPreview(
+                &g_sensor_filters[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE],
+                g_sensor_cycle_samples[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE]);
         }
 
         bool thermal_samples_valid = window_advanced || use_preview;
@@ -349,15 +386,21 @@ void App_SensorTask(void *argument)
                 channel_valid[APP_SENSOR_FILTER_BATTERY_NTC],
             .battery_voltage_valid =
                 channel_valid[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
-            .ntc1_valid = thermal_samples_valid,
-            .ntc2_valid = thermal_samples_valid,
-            .ntc3_valid = thermal_samples_valid,
-            .ntc1_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(ntc1_mean)),
-            .ntc2_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(ntc2_mean)),
-            .ntc3_temperature_deci_c = App_SensorConvertNtcTemperature(
-                App_RuntimeRawToMillivolts(ntc3_mean)),
+            .mcu_valid = thermal_samples_valid,
+            .lm51770_valid = thermal_samples_valid,
+            .mp4317_valid = thermal_samples_valid,
+            .drv8874_valid = thermal_samples_valid,
+            .charge_mos_valid = thermal_samples_valid,
+            .mcu_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(mcu_mean)),
+            .lm51770_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(lm51770_mean)),
+            .mp4317_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(mp4317_mean)),
+            .drv8874_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(drv8874_mean)),
+            .charge_mos_temperature_deci_c = App_SensorConvertNtcTemperature(
+                App_RuntimeRawToMillivolts(charge_mos_mean)),
         };
         AppThermalTransition thermal_transition =
             App_SensorThermalGuardUpdate(&g_sensor_thermal_guard,
@@ -384,16 +427,24 @@ void App_SensorTask(void *argument)
                 g_sensor_cycle_means[APP_SENSOR_FILTER_BATTERY_VOLTAGE],
                 App_SensorConvertBatteryVoltage);
             App_SensorUpdateMeasure(
-                &next_snapshot.ntc1,
-                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC1],
+                &next_snapshot.mcu_temperature,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_MCU_TEMPERATURE],
                 App_SensorConvertNtcTemperature);
             App_SensorUpdateMeasure(
-                &next_snapshot.ntc2,
-                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC2],
+                &next_snapshot.lm51770_temperature,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_LM51770_TEMPERATURE],
                 App_SensorConvertNtcTemperature);
             App_SensorUpdateMeasure(
-                &next_snapshot.ntc3,
-                g_sensor_cycle_means[APP_SENSOR_FILTER_NTC3],
+                &next_snapshot.mp4317_temperature,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_MP4317_TEMPERATURE],
+                App_SensorConvertNtcTemperature);
+            App_SensorUpdateMeasure(
+                &next_snapshot.drv8874_temperature,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_DRV8874_TEMPERATURE],
+                App_SensorConvertNtcTemperature);
+            App_SensorUpdateMeasure(
+                &next_snapshot.charge_mos_temperature,
+                g_sensor_cycle_means[APP_SENSOR_FILTER_CHARGE_MOS_TEMPERATURE],
                 App_SensorConvertNtcTemperature);
 
             /* DRV8874 IPROPI 电流快照：仅当电机在 FWD/REV 时取 mA→dA 转换；

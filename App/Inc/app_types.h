@@ -17,9 +17,11 @@ typedef struct
 {
     AppAnalogMeasure battery_ntc;
     AppAnalogMeasure battery_voltage;
-    AppAnalogMeasure ntc1;
-    AppAnalogMeasure ntc2;
-    AppAnalogMeasure ntc3;
+    AppAnalogMeasure mcu_temperature;
+    AppAnalogMeasure lm51770_temperature;
+    AppAnalogMeasure mp4317_temperature;
+    AppAnalogMeasure drv8874_temperature;
+    AppAnalogMeasure charge_mos_temperature;
     uint32_t sample_tick;
     uint32_t sample_counter;
     /* DRV8874 IPROPI 电流 (来自 motor 状态)：
