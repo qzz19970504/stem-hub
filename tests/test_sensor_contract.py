@@ -79,8 +79,19 @@ def test_sense_uses_semantic_component_temperature_fields() -> None:
 
 def test_cubemx_maps_pa0_and_pa1_to_required_adc_instances() -> None:
     ioc = read_repository_file("stem-hub.ioc")
-    assert re.search(r"^PA0\.Signal=ADC1_IN0$", ioc, re.MULTILINE)
-    assert re.search(r"^PA1\.Signal=ADC2_IN1$", ioc, re.MULTILINE)
+    required_lines = (
+        "PA0.Signal=ADCx_IN0",
+        "PA1.Signal=ADCx_IN1",
+        "SH.ADCx_IN0.0=ADC1_IN0,IN0",
+        "SH.ADCx_IN0.ConfNb=1",
+        "SH.ADCx_IN1.0=ADC2_IN1,IN1",
+        "SH.ADCx_IN1.ConfNb=1",
+    )
+    for required_line in required_lines:
+        assert len(re.findall(rf"^{re.escape(required_line)}$", ioc, re.MULTILINE)) == 1
+
+    assert not re.search(r"^PA0\.Signal=ADC1_IN0$", ioc, re.MULTILINE)
+    assert not re.search(r"^PA1\.Signal=ADC2_IN1$", ioc, re.MULTILINE)
 
 
 def test_generated_adc_gpio_groups_include_pa0_and_pa1() -> None:
