@@ -2,6 +2,8 @@
 
 #include <limits.h>
 
+#define PROTECTED_TEMPERATURE_COUNT 5U
+
 static bool IsInvalidTemperature(int32_t temperature_deci_c)
 {
     return temperature_deci_c == INT32_MAX;
@@ -31,15 +33,15 @@ void App_ThermalGuardInit(AppThermalGuard *guard,
 }
 
 AppThermalTransition App_ThermalGuardUpdate(AppThermalGuard *guard,
-                                            int32_t ntc1_temperature_deci_c,
-                                            int32_t ntc2_temperature_deci_c,
-                                            int32_t ntc3_temperature_deci_c)
+                                            const int32_t *temperatures_deci_c,
+                                            size_t temperature_count)
 {
-    if (!guard->active)
+    size_t index;
+
+    if ((temperatures_deci_c == NULL)
+        || (temperature_count != PROTECTED_TEMPERATURE_COUNT))
     {
-        if (ShouldTrip(guard, ntc1_temperature_deci_c)
-            || ShouldTrip(guard, ntc2_temperature_deci_c)
-            || ShouldTrip(guard, ntc3_temperature_deci_c))
+        if (!guard->active)
         {
             guard->active = true;
             return APP_THERMAL_TRIPPED;
@@ -48,15 +50,30 @@ AppThermalTransition App_ThermalGuardUpdate(AppThermalGuard *guard,
         return APP_THERMAL_NO_CHANGE;
     }
 
-    if (CanClear(guard, ntc1_temperature_deci_c)
-        && CanClear(guard, ntc2_temperature_deci_c)
-        && CanClear(guard, ntc3_temperature_deci_c))
+    if (!guard->active)
     {
-        guard->active = false;
-        return APP_THERMAL_CLEARED;
+        for (index = 0U; index < temperature_count; ++index)
+        {
+            if (ShouldTrip(guard, temperatures_deci_c[index]))
+            {
+                guard->active = true;
+                return APP_THERMAL_TRIPPED;
+            }
+        }
+
+        return APP_THERMAL_NO_CHANGE;
     }
 
-    return APP_THERMAL_NO_CHANGE;
+    for (index = 0U; index < temperature_count; ++index)
+    {
+        if (!CanClear(guard, temperatures_deci_c[index]))
+        {
+            return APP_THERMAL_NO_CHANGE;
+        }
+    }
+
+    guard->active = false;
+    return APP_THERMAL_CLEARED;
 }
 
 bool App_ThermalAllowsPowerMode(bool thermal_active, AppPowerMode mode)

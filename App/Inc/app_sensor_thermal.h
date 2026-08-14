@@ -10,12 +10,16 @@ typedef struct
 {
     bool battery_ntc_valid;
     bool battery_voltage_valid;
-    bool ntc1_valid;
-    bool ntc2_valid;
-    bool ntc3_valid;
-    int32_t ntc1_temperature_deci_c;
-    int32_t ntc2_temperature_deci_c;
-    int32_t ntc3_temperature_deci_c;
+    bool mcu_valid;
+    bool lm51770_valid;
+    bool mp4317_valid;
+    bool drv8874_valid;
+    bool charge_mos_valid;
+    int32_t mcu_temperature_deci_c;
+    int32_t lm51770_temperature_deci_c;
+    int32_t mp4317_temperature_deci_c;
+    int32_t drv8874_temperature_deci_c;
+    int32_t charge_mos_temperature_deci_c;
 } AppSensorThermalInputs;
 
 AppThermalTransition App_SensorThermalGuardUpdate(
