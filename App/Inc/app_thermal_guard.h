@@ -2,6 +2,7 @@
 #define APP_THERMAL_GUARD_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "app_types.h"
@@ -24,9 +25,8 @@ void App_ThermalGuardInit(AppThermalGuard *guard,
                           int32_t trip_temperature_deci_c,
                           int32_t clear_temperature_deci_c);
 AppThermalTransition App_ThermalGuardUpdate(AppThermalGuard *guard,
-                                            int32_t ntc1_temperature_deci_c,
-                                            int32_t ntc2_temperature_deci_c,
-                                            int32_t ntc3_temperature_deci_c);
+                                            const int32_t *temperatures_deci_c,
+                                            size_t temperature_count);
 
 bool App_ThermalAllowsPowerMode(bool thermal_active, AppPowerMode mode);
 bool App_ThermalAllowsOutputState(bool thermal_active, bool enabled);

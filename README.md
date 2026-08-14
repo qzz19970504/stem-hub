@@ -2,7 +2,7 @@
 
 基于 STM32F103C8T6 和 FreeRTOS 的嵌入式控制项目，当前聚焦于多路 ADC 采集、DRV8874 电机驱动、UART AT 指令控制，以及 UART1 与 UART2/UART3 之间的可控双向二进制隧道。
 
-当前固件版本仍为 `release-v3.1`。`codex/test-thermal-charge-time` 是 MCU 测试分支：在不改变上位机 v3.1 握手的前提下，增加 RAM 内可调的 60 秒充电占空时间，以及由 NTC1/NTC2/NTC3 驱动的过温停机保护。上位机仓库、UI 和 fake firmware 均未修改。
+当前固件版本为 `release-v3.2`。本版使用语义化温度通道，增加 MCU、LM51770、MP4317、DRV8874 和 LM51770 充电 MOS 五路器件温度。固件按固定顺序发送 SENSE 字段；v3.2 上位机严格要求完整、无重复的语义字段集合。
 
 ## 快速开始
 
@@ -61,7 +61,7 @@
 - UART1 作为主控制串口，使用非阻塞中断接收 AT 指令。
 - UART2、UART3 可按 AT 命令独立开关；上位机可用 `AT+UARTTX=<HEX>` 精确发送二进制数据，UART2/UART3 收到的数据会以 `+UART2RX:<HEX>` / `+UART3RX:<HEX>` 异步回传。
 - 保留 v2.1 的 CRLF 行文本转发路径，用于兼容旧上位机；新上位机应优先使用 v2.2 的十六进制帧协议。
-- 使用 ADC1 和 ADC2 采样电池 NTC、电池电压、3 路 NTC 电压，以及电机电流检测通道。
+- 使用 ADC1 和 ADC2 采样电池 NTC、电池电压、5 路器件 NTC 电压，以及电机电流检测通道。
 - 使用 FreeRTOS 任务划分 AT 解析、传感采样、电机控制、LED 控制、NMOS 控制。
 - 通过 DRV8874 的 PH/EN 模式控制电机正转、反转、制动、睡眠，并加入换向死区和过流保护阈值。
 
@@ -69,12 +69,12 @@
 
 下面区分已经落地的换算与仍未覆盖的系统能力，不把未来规划写成已完成：
 
-- BATT_NTC（电池 NTC，ADC1 IN4）已用查表法实现温度换算（R25=10kΩ, B25/85=3435K, -55~+125°C, 1°C 步长, 线性插值），与 NTC1/NTC2/NTC3 用的 HNTC0603-103F3450FA 不是同型号，分两个表。
-- NTC1/NTC2/NTC3（ADC2 IN9/IN7/IN6）已用查表法实现温度换算（HNTC0603-103F3450FA，-40~+125°C，1°C 步长，线性插值）；具体精度受 12-bit ADC 量化限制（0~85°C 区间约 ±0.5°C，低温段因 Vadc 接近 0 误差更大）。
+- BATT_NTC（电池 NTC，PA4 / 物理引脚 14 / ADC1 IN4）使用独立的 3435K 查找表（R25=10kΩ，-55~+125°C，1°C 步长，线性插值），仅显示，不参与过温保护。
+- MCU、LM51770、MP4317、DRV8874 和 CHARGE_MOS 五路器件 NTC 均为 HNTC0603-103F3450FA（R25=10kΩ，B25/85=3450K），共用 `3V3 -- NTC -- ADC -- 470 Ω -- GND` 拓扑和同一张 -40~+125°C 查找表。
 - nFAULT 和 nFLT 目前只支持 GPIO 读取和查询，没有完整故障恢复流程。
 - 没有提供下载、烧录、量产参数配置脚本。
 - 没有引入 DMA 串口接收或 ADC DMA 扫描，当前实现以简单、稳定、容易维护为优先。
-- 测试分支的默认充电周期仍为 10 秒开 / 50 秒关，并增加 NTC1/2/3 软件过温停机；这仍只是一项试验性降额保护，不包含充电电流、累计充电时长、自动故障锁存或硬件级保护，也不能保证 LM51770 或外部功率器件安全。禁止无人值守带载，带载前仍必须核查实际充电电流、MOSFET、电感饱和、限流设定和散热设计。
+- 默认充电周期仍为 10 秒开 / 50 秒关；五路器件温度均受软件过温停机保护。这仍不替代硬件限流、器件选型和独立温度保护；禁止无人值守带载，带载前仍必须核查实际充电电流、MOSFET、电感饱和、限流设定和散热设计。
 
 ## 先决条件
 
@@ -210,12 +210,12 @@ at+led=on\r\n
 
 | 指令 | 说明 | 回包示例 |
 | --- | --- | --- |
-| AT+SENSE? | 读取最近传感快照；五路 1 Hz 传感 ADC 为最近五周期均值 | +SENSE:BATT_NTC=25.1C,BATT_V=37.0V,NTC1_C=25.3C,NTC2_C=25.2C,NTC3_C=25.4C,MOTOR_I=0.8A,TICK=4567,COUNT=8,STK_AT=512,STK_SENSOR=384,STK_MOTOR=420,TX_SP=0,TX_LS=0 |
+| AT+SENSE? | 读取最近传感快照；七路 1 Hz 传感 ADC 为最近五个完整周期的同步均值 | +SENSE:BATT_NTC=25.1C,BATT_V=37.0V,MCU_C=25.3C,LM51770_C=25.2C,MP4317_C=25.4C,DRV8874_C=26.1C,CHARGE_MOS_C=24.8C,MOTOR_I=0.8A,TICK=4567,COUNT=8,STK_AT=512,STK_SENSOR=384,STK_MOTOR=420,TX_SP=0,TX_LS=0 |
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
 | AT+CHARGE_TIME=? | 查询当前 RAM 内充电开启时间 | +CHARGE_TIME:10 |
-| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.1 |
+| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.2 |
 
 控制类命令成功时返回：
 
@@ -236,7 +236,7 @@ ERROR:OVER_TEMPERATURE
 
 `ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。
 
-### 测试分支的充电时间语义
+### 充电时间语义
 
 - `AT+CHARGE_TIME=n` 只接受十进制整数 1～60，成功返回 `OK`；`AT+CHARGE_TIME=?` 精确返回 `+CHARGE_TIME:<n>\r\nOK\r\n`。
 - 周期固定为 60 秒，ON 为 `n` 秒，OFF 为 `60-n` 秒；默认 `n=10`。配置只存 RAM，MCU 复位后恢复 10 秒开 / 50 秒关。
@@ -272,38 +272,40 @@ OK\r\n
 上位机连上 UART1 后，先发一次 `AT+VERSION?`，约定如下：
 
 - 成功回包：单行 `+VERSION:<version>` 后跟 `OK`。
-- 例：`+VERSION:release-v3.1\r\nOK\r\n`。
-- 拿到回包即确认固件可解析且能应答；v3.x 使用 `AT+CHARGE` / `AT+DRIVE` / `AT+POWER=OFF`，不再接受独立芯片命令。
+- 例：`+VERSION:release-v3.2\r\nOK\r\n`。
+- 当前上位机要求精确匹配 `release-v3.2`；匹配后使用语义化 SENSE 字段，不兼容旧的编号 NTC 字段。
 - 超时建议：500 ms 之内没拿到 `OK` 即视为握手失败。
 
 ### 传感采样说明
 
 当前传感任务每 1 秒采样一次，采样内容如下：
 
-| ADC | 通道 | 用途 |
-| --- | --- | --- |
-| ADC1 | IN4 | 电池 NTC |
-| ADC1 | IN5 | 电池电压 |
-| ADC2 | IN6 | NTC3 |
-| ADC2 | IN7 | NTC2 |
-| ADC2 | IN9 | NTC1 |
-| ADC2 | IN8 | 电机电流检测，供电机任务使用 |
+| 语义量 | MCU 引脚 / 物理引脚 | ADC 通道 | NTC / 用途 |
+| --- | --- | --- | --- |
+| BATT_NTC | PA4 / 14 | ADC1 IN4 | 电池 NTC，独立 3435K 表，仅显示 |
+| BATT_V | PA5 | ADC1 IN5 | 电池电压 |
+| MCU_C | PB1 / 19 | ADC2 IN9 | HNTC0603-103F3450FA |
+| LM51770_C | PA7 / 17 | ADC2 IN7 | HNTC0603-103F3450FA |
+| MP4317_C | PA6 / 16 | ADC2 IN6 | HNTC0603-103F3450FA |
+| DRV8874_C | PA1 / 11 | ADC2 IN1 | HNTC0603-103F3450FA |
+| CHARGE_MOS_C | PA0 / 10 | ADC1 IN0 | LM51770 充电 MOS，HNTC0603-103F3450FA |
+| MOTOR_I | PB0 | ADC2 IN8 | 电机电流检测，供电机任务使用 |
 
 说明：
 
 - ADC2_IN8 不参与 1Hz 传感结构刷新，而是留给电机电流检测使用。
 - ADC2 访问通过互斥锁保护，避免传感任务和电机任务竞争同一外设。
-- 只有五路 ADC 在同一采样周期全部读取成功时，BATT_NTC、BATT_V、NTC1、NTC2、NTC3 的静态环形窗口才同步推进；每路使用最近五个完整成功周期的原始值求均值后再换算物理量，启动前四个完整周期按已有样本数求均值。
-- 五个窗口使用静态 RAM 和 `uint32_t` 运行和，不在 sensorTask 栈上分配快照数组；单路最大和仅为 `5 × 4095 = 20475`。
+- BATT_NTC、BATT_V 与五路器件 NTC 组成同步七通道 1 Hz 滚动窗口。只有七路在同一周期全部成功时才同时推进并发布；任何部分周期都不得推进或发布。每路使用最近五个完整周期的原始值求均值后再换算物理量，启动前四个完整周期按已有完整样本数求均值。
+- 七个窗口使用静态 RAM 和 `uint32_t` 运行和，不在 sensorTask 栈上分配快照数组；单路最大和仅为 `5 × 4095 = 20475`。
 - 电机 `MOTOR_I` 参与过流保护，因此不使用五周期均值，继续保留即时采样语义。
 
-### 测试分支的 NTC 过温停机
+### 器件 NTC 过温停机
 
-- 保护只使用 NTC1、NTC2、NTC3；当前硬件未焊接的 BATT_NTC 不参与判断。五路采样全部成功时，判断输入与 `AT+SENSE?` 显示一致，均为最近五个完整成功采样周期的平均结果，因此可能产生最多约数秒的响应延迟。若只有电池通道读取失败，保护会用正式同步窗口加本周期 NTC 样本计算只读预览均值，不推进或发布 SENSE 窗口。
+- 保护使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，保护输入与 `AT+SENSE?` 发布值一致。若电池 NTC 或电池电压读取失败而五路受保护器件通道成功，保护使用正式同步窗口加本周期器件样本计算只读预览均值，但不推进窗口、不发布 SENSE。
 - 任一路严格高于 60.0°C、温度转换无效，或受保护 NTC 的 ADC 读取失败，都会锁存过温保护。触发后取消 CHARGE/DRIVE，关闭 LM51770、MP4317、NMOS1、NMOS2，并让电机进入 SLEEP；LED 保持原状态。
 - 停机请求通过高优先级队列发送，输出任务和电机任务还会每 100 ms 复查保护状态，阻止停机前已排队的旧开启命令重新打开输出。
-- 只有 NTC1/2/3 三路读数都有效且全部不高于 55.0°C 才解除锁存。解除后仅重新允许人工命令，不自动恢复停机前的充电、驱动、NMOS 或电机状态。
-- 保护期间仍允许 OFF、MOTOR SLEEP、查询以及 `CHARGE_TIME` 设置/查询；CHARGE、DRIVE、NMOS1/2 ON 和非 SLEEP 电机模式返回 `ERROR:OVER_TEMPERATURE`。本分支没有新增温度查询或运行时温度阈值调参指令。
+- 只有五路受保护器件温度都有效且全部不高于 55.0°C 才解除锁存。解除后仅重新允许人工命令，不自动恢复停机前的充电、驱动、NMOS 或电机状态。
+- 保护期间仍允许 OFF、MOTOR SLEEP、查询以及 `CHARGE_TIME` 设置/查询；CHARGE、DRIVE、NMOS1/2 ON 和非 SLEEP 电机模式返回 `ERROR:OVER_TEMPERATURE`。v3.2 没有新增温度阈值调参指令。
 
 ### 电机控制说明
 
@@ -504,7 +506,7 @@ AT+UARTTX=414243
 2. 为电机、电源和故障状态增加更多主机侧测试。
 3. 评估 DMA 串口接收或 ADC 扫描采样方案，但要先确认复杂度和 RAM 余量是否可接受。
 4. 若通过 CubeMX 重新生成代码，务必检查用户代码区和 [cmake/stm32cubemx/CMakeLists.txt](cmake/stm32cubemx/CMakeLists.txt) 是否仍然保留了应用层源文件。
-5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；v3.1 Debug 构建使用约 94.26% RAM，五路滤波窗口位于静态 RAM，本次充电循环未新增任务栈。
+5. 新增任务、队列或缓冲区时重新检查 20 KB RAM 占用和任务栈高水位；七路滤波窗口位于静态 RAM，充电循环未新增任务栈。
 6. 新增业务模块时，优先放进 [App/Inc](App/Inc) 和 [App/Src](App/Src)，避免把业务重新写回 [Core](Core)。
 
 ## 相关文件

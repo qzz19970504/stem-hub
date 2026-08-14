@@ -11,10 +11,13 @@ int main(void)
     AppAdcRollingMean maximum = {0};
     AppAdcRollingMean cycle_filters[APP_ADC_ROLLING_CHANNEL_COUNT] = {0};
     const uint16_t partial_cycle[] = {100U, 200U, 300U, 400U};
-    const uint16_t complete_cycle[] = {100U, 200U, 300U, 400U, 500U};
+    const uint16_t complete_cycle[] = {
+        100U, 200U, 300U, 400U, 500U, 600U, 700U
+    };
     uint16_t cycle_means[APP_ADC_ROLLING_CHANNEL_COUNT] = {0};
     size_t index;
 
+    assert(APP_ADC_ROLLING_CHANNEL_COUNT == 7U);
     assert(App_AdcRollingMeanPush(&filter, 100U) == 100U);
     assert(App_AdcRollingMeanPush(&filter, 200U) == 150U);
     assert(App_AdcRollingMeanPush(&filter, 300U) == 200U);
@@ -66,7 +69,9 @@ int main(void)
                   synchronized_before,
                   sizeof(synchronized_before)) == 0);
 
-    const uint16_t next_complete_cycle[] = {200U, 300U, 400U, 500U, 600U};
+    const uint16_t next_complete_cycle[] = {
+        200U, 300U, 400U, 500U, 600U, 700U, 800U
+    };
     assert(App_AdcRollingMeanPushCycle(cycle_filters,
                                        next_complete_cycle,
                                        APP_ADC_ROLLING_CHANNEL_COUNT,

@@ -2,8 +2,8 @@
 
 本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
 
-> 适用固件：测试分支 `codex/test-thermal-charge-time`，握手版本仍为 `release-v3.1`
-> 更新方式：在 v3.1 协议上增加 MCU 侧充电时间配置和 NTC 软件过温停机；上位机代码、UI、fake firmware 与握手逻辑未修改。
+> 适用固件：`release-v3.2`
+> 接口要点：固件按固定顺序发送语义化 SENSE 字段；上位机必须精确匹配 v3.2 握手，并严格要求完整、无重复的语义字段集合，不兼容旧的编号 NTC 字段。
 
 ## 1. 文档范围
 
@@ -20,7 +20,7 @@
 - NMOS1、NMOS2 控制
 - MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
 - 60 秒周期内的充电开启时间设置与查询
-- NTC1/NTC2/NTC3 软件过温停机
+- MCU、LM51770、MP4317、DRV8874 与 LM51770 充电 MOS 五路器件温度的软件过温停机
 - 传感采样结果查询
 - nFAULT、nFLT 状态查询
 
@@ -209,7 +209,7 @@ ERROR:UNSUPPORTED
 
 | 分类 | 指令 | 作用 |
 | --- | --- | --- |
-| 采样 | AT+SENSE?\r\n | 查询最近传感快照；五路传感 ADC 为最近五周期均值 |
+| 采样 | AT+SENSE?\r\n | 查询最近传感快照；七路 1 Hz 传感 ADC 为最近五个完整周期的同步均值 |
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 诊断 | AT+DIAG?\r\n | 查询控制链路、TX、传感任务及 UART2/UART3 RX 计数器 |
@@ -476,15 +476,15 @@ OK
 - `n=60` 表示连续 ON。内部仍以 60 秒为周期边界接收后续配置，但边界处不会切换 EN，因此不会每分钟重新软启动 LM51770。
 - CHARGE 开关表示间歇循环已启用，不表示 EN 在查询时刻必然开启。
 
-#### 5.4.4 NTC 软件过温停机
+#### 5.4.4 器件 NTC 软件过温停机
 
-- 判断只使用 NTC1/NTC2/NTC3，不使用当前未焊接的 BATT_NTC。五路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整成功采样周期的平均值，所以保护可能有最多约数秒的响应延迟。若只有电池通道读取失败，保护使用正式同步窗口加本周期 NTC 样本得到的只读预览均值，不推进或发布 SENSE 窗口。
+- 判断使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整周期的同步平均值。若 BATT_NTC 或 BATT_V 读取失败而五路器件通道成功，保护使用正式同步窗口加本周期器件样本得到的只读预览均值，不推进窗口，也不发布 SENSE。
 - 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、让电机进入 SLEEP；LED 不变。
 - 高优先级停机消息之外，输出和电机消费者每 100 ms 自检一次，保护期间不会执行旧队列里的开启命令。
-- 三路必须全部有效且都不高于 55.0°C 才解除锁存。解除后需要上位机重新发送开启命令，固件不会自动恢复停机前状态。
+- 五路受保护器件温度必须全部有效且都不高于 55.0°C 才解除锁存。解除后需要上位机重新发送开启命令，固件不会自动恢复停机前状态。
 - 保护期间允许关闭类命令、`AT+MOTOR=SLEEP`、所有查询和 `CHARGE_TIME` 设置/查询；危险开启命令返回 `ERROR:OVER_TEMPERATURE`。没有新增温度状态查询或阈值调参 AT 指令。
 
-安全边界：可调占空和 NTC 停机都是测试分支的软件降额保护，不包含充电电流、累计充电时长或硬件故障锁存，也不能替代硬件限流、功率器件选型和散热设计。查明实际电流和损坏原因前，禁止无人值守满功率带载。
+安全边界：可调占空和 NTC 停机是软件保护，不包含充电电流、累计充电时长或硬件故障锁存，也不能替代硬件限流、功率器件选型和散热设计。查明实际电流和损坏原因前，禁止无人值守满功率带载。
 
 ### 5.5 传感查询命令
 
@@ -497,7 +497,7 @@ AT+SENSE?
 #### 5.5.2 响应格式
 
 ```text
-+SENSE:BATT_NTC=<value>,BATT_V=<value>V,NTC1_C=<value>C,NTC2_C=<value>C,NTC3_C=<value>C,MOTOR_I=<value>A,TICK=<value>,COUNT=<value>,STK_AT=<value>,STK_SENSOR=<value>,STK_MOTOR=<value>,TX_SP=<value>,TX_LS=<value>
++SENSE:BATT_NTC=<value>,BATT_V=<value>V,MCU_C=<value>,LM51770_C=<value>,MP4317_C=<value>,DRV8874_C=<value>,CHARGE_MOS_C=<value>,MOTOR_I=<value>A,TICK=<value>,COUNT=<value>,STK_AT=<value>,STK_SENSOR=<value>,STK_MOTOR=<value>,TX_SP=<value>,TX_LS=<value>
 OK
 ```
 
@@ -505,22 +505,24 @@ OK
 
 | 字段 | 含义 |
 | --- | --- |
-| BATT_NTC | 电池 NTC 温度（℃），保留 1 位小数（如 25.1C、-5.2C、ERR）。查表法实现，对应 ADC1 IN4。 |
-| BATT_V | 电池电压当前值，单位为伏特（V），保留 1 位小数（如 3.3V、37.0V）。已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。 |
-| NTC1_C | NTC1 温度（℃），保留 1 位小数（如 25.3C、-5.2C），查表法实现 |
-| NTC2_C | NTC2 温度（℃），格式同 NTC1_C |
-| NTC3_C | NTC3 温度（℃），格式同 NTC1_C |
+| BATT_NTC | 电池 NTC 温度（℃），PA4 / 物理引脚 14 / ADC1 IN4；保留 1 位小数或 ERR。使用独立 3435K 表，仅显示。 |
+| BATT_V | 电池电压（ADC1 IN5），单位为伏特（V），保留 1 位小数（如 3.3V、37.0V）。已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。 |
+| MCU_C | MCU 温度（℃），PB1 / 物理引脚 19 / ADC2 IN9；保留 1 位小数或 ERR。 |
+| LM51770_C | LM51770 温度（℃），PA7 / 物理引脚 17 / ADC2 IN7；格式同 MCU_C。 |
+| MP4317_C | MP4317 温度（℃），PA6 / 物理引脚 16 / ADC2 IN6；格式同 MCU_C。 |
+| DRV8874_C | DRV8874 温度（℃），PA1 / 物理引脚 11 / ADC2 IN1；格式同 MCU_C。 |
+| CHARGE_MOS_C | LM51770 充电 MOS 温度（℃），PA0 / 物理引脚 10 / ADC1 IN0；格式同 MCU_C。 |
 | MOTOR_I | DRV8874 IPROPI 电流，保留 1 位小数（如 0.8A、2.9A）。0.1 A 分辨率，最高 2.9 A（ADC 物理满量程；电机不在 FWD/REV 时固定为 0.0A）。 |
 | TICK | 本次样本写入时的系统 Tick |
 | STK_AT / STK_SENSOR / STK_MOTOR | atTask / sensorTask / motorTask 栈高水位（word），被动观测字段 |
 | TX_SP / TX_LS | 最近一次发送前的 `huart->gState` 与返回值（HAL 状态机快照），被动观测字段 |
 | COUNT | 样本计数 |
 
-NTC 拓扑为 3V3 -- NTC -- ADC测点 -- 470Ω -- GND。
+五路器件 NTC 均使用 HNTC0603-103F3450FA（R25=10kΩ，B25/85=3450K）及共同拓扑 `3V3 -- NTC -- ADC测点 -- 470Ω -- GND`，共用 -40°C ~ +125°C 查找表。
 
-BATT_NTC（电池 NTC，ADC1 IN4）使用 3435K 系 NTC，电阻分压比相同但型号与 NTC1_C/NTC2_C/NTC3_C 不同：  
+BATT_NTC 使用独立的 3435K 系 NTC 表，与五路 HNTC0603-103F3450FA 器件表分开：
 - BATT_NTC 范围 -55°C ~ +125°C，钳位到表外时分别返回 -55.0C / 125.0C。读数为 0（开路）时钳位到 -55.0C，读数 ≥ 3300mV（短路）时返回 ERR。  
-- NTC1/NTC2/NTC3 使用 HNTC0603-103F3450FA，范围 -40°C ~ +125°C，钳位到表外时分别返回 -40.0C / 125.0C。读数为 0（开路）时钳位到 -40.0C，读数 ≥ 3300mV（短路）时返回 ERR。
+- 五路器件 NTC 范围 -40°C ~ +125°C，钳位到表外时分别返回 -40.0C / 125.0C。读数为 0（开路）时钳位到 -40.0C，读数 ≥ 3300mV（短路）时返回 ERR。
 
 MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：  
 - 拓扑：IPROPI -- [R19=2.5kΩ] -- GND → ADC2 IN8。  
@@ -531,9 +533,10 @@ MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：
 
 注意：
 
-- BATT_NTC / NTC1_C / NTC2_C / NTC3_C 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大（Vadc 已 < 25mV）。
-- 只有五路 ADC 在同一采样周期全部读取成功时才同步推进窗口；BATT_NTC、BATT_V、NTC1_C、NTC2_C、NTC3_C 先对最近五个完整成功周期的原始值求均值，再换算物理量，启动前四个完整周期按已有样本数计算。
-- 五个固定窗口和运行和位于静态 RAM，不在 sensorTask 栈上创建五份快照；单路运行和最大为 20475。
+- BATT_NTC 与五路器件 NTC 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大（Vadc 已 < 25mV）。
+- BATT_NTC、BATT_V、MCU_C、LM51770_C、MP4317_C、DRV8874_C、CHARGE_MOS_C 组成同步七通道 1 Hz 窗口；只有七路在同一周期全部成功时才共同推进并发布，任何部分周期都不推进、不发布。每路先对最近五个完整周期的原始值求均值再换算，启动前四个完整周期按已有完整样本数计算。
+- 七个固定窗口和运行和位于静态 RAM，不在 sensorTask 栈上创建快照；单路运行和最大为 20475。
+- 字段顺序固定为 `BATT_NTC,BATT_V,MCU_C,LM51770_C,MP4317_C,DRV8874_C,CHARGE_MOS_C,MOTOR_I,TICK,COUNT,STK_AT,STK_SENSOR,STK_MOTOR,TX_SP,TX_LS`；v3.2 不提供旧编号 NTC 字段的兼容别名。
 - MOTOR_I 由电机状态产生，sensorTask 每秒最多更新一次；上次残值不影响停机显示（电机模式 ≠ FWD/REV 时强制归零）。
 - MOTOR_I 参与即时过流保护，不使用五周期滑动平均。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
@@ -662,17 +665,17 @@ OK
 示例：
 
 ```text
-+VERSION:release-v3.1
++VERSION:release-v3.2
 OK
 ```
 
 说明：
 
-- 用于上位机连接 UART1 后的握手。拿到 `+VERSION:...` + `OK` 即可确认固件能解析且能应答。
+- 用于上位机连接 UART1 后的握手；当前上位机只接受精确的 `+VERSION:release-v3.2` 后跟 `OK`。
 - `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
 - 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
-- v3.1 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
-- 本测试分支仍返回 `release-v3.1`，现有上位机握手保持兼容；上位机没有同步增加 `CHARGE_TIME` UI，联调该命令需直接使用串口 AT 接口。
+- v3.2 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
+- v3.2 上位机严格解析语义化 SENSE 字段，不兼容旧的编号 NTC 接口。
 - v2.2 相比 v2.1 新增的 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段在 v3.0 中继续保留。
 - 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道，v2.2 上位机也不能假定独立电源芯片指令仍有效。
 
@@ -805,7 +808,7 @@ AT+DRIVE=ON
 
 ### 9.2 为什么查询采样值不稳定
 
-固件已对五路 1 Hz 传感 ADC 使用最近五周期滑动平均，但仍可能受以下因素影响：
+固件已对七路同步 1 Hz 传感 ADC 使用最近五个完整周期的滑动平均，但仍可能受以下因素影响：
 
 - ADC 输入本身硬件噪声较大
 - 传感任务每 1 秒才更新一次，完整窗口对应最近约 5 秒，不是高速采样接口
