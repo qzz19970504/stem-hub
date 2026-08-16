@@ -8,6 +8,7 @@ typedef struct
     AppMotorStatus motor_status;
     AppIoStatus io_status;
     uint32_t charge_on_time_seconds;
+    uint32_t stall_current_ma;
     bool bridge_uart2_enabled;
     bool bridge_uart3_enabled;
     bool thermal_protection_active;
@@ -28,6 +29,7 @@ static AppState g_app_state = {
         .mp4317_enabled = false,
     },
     .charge_on_time_seconds = APP_CHARGE_DEFAULT_ON_TIME_SECONDS,
+    .stall_current_ma = APP_MOTOR_STALL_DEFAULT_CURRENT_MA,
     .bridge_uart2_enabled = false,
     .bridge_uart3_enabled = false,
     .thermal_protection_active = false,
@@ -233,6 +235,41 @@ bool App_StateTryGetChargeOnTimeSeconds(uint32_t *seconds)
     }
 
     *seconds = g_app_state.charge_on_time_seconds;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
+}
+
+bool App_StateSetStallCurrentMa(uint32_t current_ma)
+{
+    if ((current_ma < APP_MOTOR_STALL_MIN_CURRENT_MA)
+        || (current_ma > APP_MOTOR_STALL_MAX_CURRENT_MA))
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    g_app_state.stall_current_ma = current_ma;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
+}
+
+bool App_StateTryGetStallCurrentMa(uint32_t *current_ma)
+{
+    if (current_ma == NULL)
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    *current_ma = g_app_state.stall_current_ma;
     (void)osMutexRelease(g_app_runtime.state_mutex);
     return true;
 }

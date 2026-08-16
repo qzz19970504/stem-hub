@@ -104,18 +104,54 @@ static void TestThermalProtectionDefaultsInactiveAndCanChange(void)
     assert(!is_active);
 }
 
+static void TestStallCurrentDefaultsToFourAmps(void)
+{
+    uint32_t current_ma = 0U;
+
+    assert(App_StateTryGetStallCurrentMa(&current_ma));
+    assert(current_ma == APP_MOTOR_STALL_DEFAULT_CURRENT_MA);
+}
+
+static void TestStallCurrentAcceptsConfiguredRange(void)
+{
+    uint32_t current_ma = 0U;
+
+    assert(App_StateSetStallCurrentMa(APP_MOTOR_STALL_MIN_CURRENT_MA));
+    assert(App_StateTryGetStallCurrentMa(&current_ma));
+    assert(current_ma == APP_MOTOR_STALL_MIN_CURRENT_MA);
+
+    assert(App_StateSetStallCurrentMa(APP_MOTOR_STALL_MAX_CURRENT_MA));
+    assert(App_StateTryGetStallCurrentMa(&current_ma));
+    assert(current_ma == APP_MOTOR_STALL_MAX_CURRENT_MA);
+}
+
+static void TestStallCurrentRejectsOutOfRangeWithoutChangingState(void)
+{
+    uint32_t current_ma = 0U;
+
+    assert(App_StateSetStallCurrentMa(APP_MOTOR_STALL_DEFAULT_CURRENT_MA));
+    assert(!App_StateSetStallCurrentMa(APP_MOTOR_STALL_MIN_CURRENT_MA - 1U));
+    assert(!App_StateSetStallCurrentMa(APP_MOTOR_STALL_MAX_CURRENT_MA + 1U));
+    assert(App_StateTryGetStallCurrentMa(&current_ma));
+    assert(current_ma == APP_MOTOR_STALL_DEFAULT_CURRENT_MA);
+}
+
 static void TestTryGetReportsInvalidOutputAndBusyState(void)
 {
     uint32_t seconds = 0U;
+    uint32_t current_ma = 0U;
     bool is_active = false;
 
     assert(!App_StateTryGetChargeOnTimeSeconds(NULL));
+    assert(!App_StateTryGetStallCurrentMa(NULL));
     assert(!App_StateTryGetThermalProtectionActive(NULL));
 
     state_mutex_available = false;
     assert(!App_StateTryGetChargeOnTimeSeconds(&seconds));
+    assert(!App_StateTryGetStallCurrentMa(&current_ma));
     assert(!App_StateTryGetThermalProtectionActive(&is_active));
     assert(!App_StateSetChargeOnTimeSeconds(APP_CHARGE_DEFAULT_ON_TIME_SECONDS));
+    assert(!App_StateSetStallCurrentMa(APP_MOTOR_STALL_DEFAULT_CURRENT_MA));
     assert(!App_StateSetThermalProtectionActive(true));
     state_mutex_available = true;
 }
@@ -137,6 +173,9 @@ int main(void)
     TestChargeTimeAcceptsConfiguredRange();
     TestChargeTimeRejectsOutOfRangeWithoutChangingState();
     TestThermalProtectionDefaultsInactiveAndCanChange();
+    TestStallCurrentDefaultsToFourAmps();
+    TestStallCurrentAcceptsConfiguredRange();
+    TestStallCurrentRejectsOutOfRangeWithoutChangingState();
     TestTryGetReportsInvalidOutputAndBusyState();
     TestMissingStateMutexFailsSafely();
     return 0;

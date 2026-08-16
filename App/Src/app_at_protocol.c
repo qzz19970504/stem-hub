@@ -153,8 +153,53 @@ static bool AppAtProtocol_ParseChargeTime(const char *value, uint32_t *seconds)
     return true;
 }
 
+static bool AppAtProtocol_ParseStallCurrent(const char *value,
+                                            uint32_t *current_ma)
+{
+    const char *current;
+    uint32_t parsed_current_ma = 0U;
+
+    if ((value == NULL) || (current_ma == NULL) || (*value == '\0'))
+    {
+        return false;
+    }
+
+    for (current = value; *current != '\0'; ++current)
+    {
+        uint32_t digit;
+
+        if ((*current < '0') || (*current > '9'))
+        {
+            return false;
+        }
+
+        digit = (uint32_t)(*current - '0');
+        if (parsed_current_ma
+            > ((APP_MOTOR_STALL_MAX_CURRENT_MA - digit) / 10U))
+        {
+            return false;
+        }
+
+        parsed_current_ma = (parsed_current_ma * 10U) + digit;
+    }
+
+    if (parsed_current_ma < APP_MOTOR_STALL_MIN_CURRENT_MA)
+    {
+        return false;
+    }
+
+    *current_ma = parsed_current_ma;
+    return true;
+}
+
 static bool AppAtProtocol_MatchQuery(const char *line, AppAtCommand *out_command)
 {
+    if (strcmp(line, "AT+STALL_CURRENT=?") == 0)
+    {
+        out_command->type = APP_AT_COMMAND_QUERY_STALL_CURRENT;
+        return true;
+    }
+
     if (strcmp(line, "AT+CHARGE_TIME=?") == 0)
     {
         out_command->type = APP_AT_COMMAND_QUERY_CHARGE_TIME;
@@ -367,6 +412,15 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         && AppAtProtocol_ParseChargeTime(value, &out_command->data.charge_time.seconds))
     {
         out_command->type = APP_AT_COMMAND_SET_CHARGE_TIME;
+        return true;
+    }
+
+    if (AppAtProtocol_MatchAssignment("AT+STALL_CURRENT=", command_body, &value)
+        && AppAtProtocol_ParseStallCurrent(
+            value,
+            &out_command->data.stall_current.current_ma))
+    {
+        out_command->type = APP_AT_COMMAND_SET_STALL_CURRENT;
         return true;
     }
 

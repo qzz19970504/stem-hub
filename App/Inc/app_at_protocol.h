@@ -47,7 +47,9 @@ typedef enum
     APP_AT_COMMAND_QUERY_DIAG,
     APP_AT_COMMAND_QUERY_VERSION,
     APP_AT_COMMAND_SET_CHARGE_TIME,
-    APP_AT_COMMAND_QUERY_CHARGE_TIME
+    APP_AT_COMMAND_QUERY_CHARGE_TIME,
+    APP_AT_COMMAND_SET_STALL_CURRENT,
+    APP_AT_COMMAND_QUERY_STALL_CURRENT
 } AppAtCommandType;
 
 typedef struct
@@ -78,6 +80,11 @@ typedef struct
 
 typedef struct
 {
+    uint32_t current_ma;
+} AppAtStallCurrentCommand;
+
+typedef struct
+{
     uint8_t bytes[APP_UART_TUNNEL_CHUNK_SIZE];
     size_t length;
 } AppAtUartPayloadCommand;
@@ -93,6 +100,7 @@ typedef struct
         AppAtMotorCommand motor;
         AppAtPowerCommand power;
         AppAtChargeTimeCommand charge_time;
+        AppAtStallCurrentCommand stall_current;
         AppAtUartPayloadCommand uart_payload;
     } data;
 } AppAtCommand;
