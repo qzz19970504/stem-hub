@@ -63,7 +63,7 @@
 - 保留 v2.1 的 CRLF 行文本转发路径，用于兼容旧上位机；新上位机应优先使用 v2.2 的十六进制帧协议。
 - 使用 ADC1 和 ADC2 采样电池 NTC、电池电压、5 路器件 NTC 电压，以及电机电流检测通道。
 - 使用 FreeRTOS 任务划分 AT 解析、传感采样、电机控制、LED 控制、NMOS 控制。
-- 通过 DRV8874 的 PH/EN 模式控制电机正转、反转、制动、睡眠，并加入换向死区和过流保护阈值。
+- 通过 DRV8874 的 PH/EN 模式控制电机正转、反转、制动、睡眠，并加入换向死区和可持久化的堵转电流保护。
 
 ## 当前能力边界
 
@@ -205,6 +205,7 @@ at+led=on\r\n
 | AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+POWER=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+CHARGE_TIME=&lt;n&gt; | 设置每个 60 秒周期的充电开启时间，`n` 为 1～60 秒 |
+| AT+STALL_CURRENT=&lt;mA&gt; | 设置堵转电流阈值，范围 1000～30000 mA；仅允许电机非 FWD/REV 时设置并写入 Flash |
 
 #### 查询类
 
@@ -215,6 +216,7 @@ at+led=on\r\n
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
 | AT+CHARGE_TIME=? | 查询当前 RAM 内充电开启时间 | +CHARGE_TIME:10 |
+| AT+STALL_CURRENT=? | 查询当前堵转电流阈值（mA） | +STALL_CURRENT:4000 |
 | AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.2 |
 
 控制类命令成功时返回：
@@ -232,9 +234,11 @@ ERROR:SENSE_NOT_READY
 ERROR:LINE_TOO_LONG
 ERROR:STATE_BUSY
 ERROR:OVER_TEMPERATURE
+ERROR:MOTOR_RUNNING
+ERROR:FLASH_WRITE
 ```
 
-`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。
+`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。`ERROR:MOTOR_RUNNING` 表示 FWD/REV 运行期间拒绝写堵转阈值，`ERROR:FLASH_WRITE` 表示非易失写入或写后校验失败。
 
 ### 充电时间语义
 
@@ -297,7 +301,7 @@ OK\r\n
 - ADC2 访问通过互斥锁保护，避免传感任务和电机任务竞争同一外设。
 - BATT_NTC、BATT_V 与五路器件 NTC 组成同步七通道 1 Hz 滚动窗口。只有七路在同一周期全部成功时才同时推进并发布；任何部分周期都不得推进或发布。每路使用最近五个完整周期的原始值求均值后再换算物理量，启动前四个完整周期按已有完整样本数求均值。
 - 七个窗口使用静态 RAM 和 `uint32_t` 运行和，不在 sensorTask 栈上分配快照数组；单路最大和仅为 `5 × 4095 = 20475`。
-- 电机 `MOTOR_I` 参与过流保护，因此不使用五周期均值，继续保留即时采样语义。
+- 电机 `MOTOR_I` 参与堵转保护，因此不使用五周期均值；电机任务每 10 ms 读取一次瞬时电流，`AT+SENSE?` 仍只按 1 Hz 快照节奏发布该状态值。
 
 ### 器件 NTC 过温停机
 
@@ -315,7 +319,12 @@ OK\r\n
 - EN/IN1 为使能，PH/IN2 为方向。
 - 从睡眠切到运行前会先 wake，再设置方向和使能。
 - 正反转切换前会先制动，并加入 20ms 死区。
-- 电流监控阈值当前为 3A 等效值，超阈值后会进入制动并锁存过流状态。
+- IPROPI 下拉电阻 R19 为 220 Ω，AIPROPI 按 450 µA/A 计算：`I_mA = V_mV × 1000 / 99`；3.3 V ADC 满量程约为 33.3 A。
+- 电机任务每 10 ms 采样。每次 FWD/REV 后先屏蔽 300 ms 启动浪涌；之后电流连续不低于阈值 100 ms 才判定堵转，立即关闭 EN、保持 nSLEEP 和方向、进入 BRAKE，并把 `OVERCURRENT` 锁存为 1。
+- 默认阈值为 4000 mA，可用 `AT+STALL_CURRENT=<1000..30000>` 设置。成功写入 STM32 最后一页 1 KiB Flash，并带 magic、版本与 CRC32 校验；记录无效时启动回退到 4000 mA。
+- 堵转后允许再次发送 FWD 或 REV，两方向均可启动且会清除旧锁存、重新执行 300 ms 屏蔽；若机械堵塞仍存在，屏蔽结束后会再次快速制动。SLEEP/WAKE/BRAKE/STOP 不清除锁存。
+- 为避免运行中擦写 Flash，FWD/REV 时设置阈值返回 `ERROR:MOTOR_RUNNING`；设置相同值不重复擦写。查询命令为 `AT+STALL_CURRENT=?`，响应为 `+STALL_CURRENT:<mA>` 后跟 `OK`。
+- 该软件停机不能替代 DRV8874 的硬件过流/故障保护、保险与功率设计。验证使用较低阈值或可控负载，不应故意制造理论 19 A 的硬堵转。
 
 ## 架构分层
 

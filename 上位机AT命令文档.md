@@ -154,6 +154,8 @@ ERROR:OUTPUT_QUEUE
 ERROR:HEX
 ERROR:UART_DISABLED
 ERROR:UART_TX
+ERROR:MOTOR_RUNNING
+ERROR:FLASH_WRITE
 ERROR:UNSUPPORTED
 ```
 
@@ -171,6 +173,8 @@ ERROR:UNSUPPORTED
 - ERROR:HEX：`AT+UARTTX` 的十六进制负载为空、长度非法、含非法字符或超过 32 字节
 - ERROR:UART_DISABLED：UART2 和 UART3 均未打开，无法执行 `AT+UARTTX`
 - ERROR:UART_TX：至少一个已选择目标的 HAL 串口发送失败
+- ERROR:MOTOR_RUNNING：电机正在 FWD/REV，禁止擦写堵转阈值
+- ERROR:FLASH_WRITE：堵转阈值的 Flash 擦除、编程或写后校验失败，RAM 中的生效值保持不变
 - ERROR:UNSUPPORTED：解析成功但当前版本不支持该类型
 
 ## 4. 指令总览
@@ -204,6 +208,7 @@ ERROR:UNSUPPORTED
 | 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 电源路径 | AT+POWER=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 充电配置 | AT+CHARGE_TIME=&lt;n&gt;\r\n | 设置每个周期的 ON 秒数，`n` 为 1～60 | OK |
+| 电机保护 | AT+STALL_CURRENT=&lt;mA&gt;\r\n | 设置并持久化堵转阈值，`mA` 为 1000～30000；仅限非 FWD/REV | OK |
 
 ### 4.2 查询类命令
 
@@ -214,6 +219,7 @@ ERROR:UNSUPPORTED
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 诊断 | AT+DIAG?\r\n | 查询控制链路、TX、传感任务及 UART2/UART3 RX 计数器 |
 | 充电配置 | AT+CHARGE_TIME=?\r\n | 查询 RAM 内当前配置；返回 `+CHARGE_TIME:<n>` 后跟 `OK` |
+| 电机保护 | AT+STALL_CURRENT=?\r\n | 查询当前堵转阈值；返回 `+STALL_CURRENT:<mA>` 后跟 `OK` |
 | 版本 | AT+VERSION?\r\n | 查询固件版本号，用于握手 |
 
 ### 4.3 兼容写法
@@ -512,7 +518,7 @@ OK
 | MP4317_C | MP4317 温度（℃），PA6 / 物理引脚 16 / ADC2 IN6；格式同 MCU_C。 |
 | DRV8874_C | DRV8874 温度（℃），PA1 / 物理引脚 11 / ADC2 IN1；格式同 MCU_C。 |
 | CHARGE_MOS_C | LM51770 充电 MOS 温度（℃），PA0 / 物理引脚 10 / ADC1 IN0；格式同 MCU_C。 |
-| MOTOR_I | DRV8874 IPROPI 电流，保留 1 位小数（如 0.8A、2.9A）。0.1 A 分辨率，最高 2.9 A（ADC 物理满量程；电机不在 FWD/REV 时固定为 0.0A）。 |
+| MOTOR_I | DRV8874 IPROPI 电流，保留 1 位小数（如 0.8A、19.0A）。0.1 A 分辨率，最高约 33.3 A（ADC 物理满量程；电机不在 FWD/REV 时固定为 0.0A）。 |
 | TICK | 本次样本写入时的系统 Tick |
 | STK_AT / STK_SENSOR / STK_MOTOR | atTask / sensorTask / motorTask 栈高水位（word），被动观测字段 |
 | TX_SP / TX_LS | 最近一次发送前的 `huart->gState` 与返回值（HAL 状态机快照），被动观测字段 |
@@ -525,11 +531,11 @@ BATT_NTC 使用独立的 3435K 系 NTC 表，与五路 HNTC0603-103F3450FA 器�
 - 五路器件 NTC 范围 -40°C ~ +125°C，钳位到表外时分别返回 -40.0C / 125.0C。读数为 0（开路）时钳位到 -40.0C，读数 ≥ 3300mV（短路）时返回 ERR。
 
 MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：  
-- 拓扑：IPROPI -- [R19=2.5kΩ] -- GND → ADC2 IN8。  
-- 公式：`I(A) = V_IPROPI(V) / (AIPROPI × R19) = V_IPROPI(V) / 1.125`（AIPROPI 取 450 µA/A）。  
-- 寄存器输出 0.1 A 分辨率整数 (deci-A)：`motor_current_a_deci = round(mA / 100)`，上限钳到 29 (= 2.9 A)。  
+- 拓扑：IPROPI -- [R19=220Ω] -- GND → ADC2 IN8。
+- 公式：`I(A) = V_IPROPI(V) / (AIPROPI × R19) = V_IPROPI(V) / 0.099`，即 `I_mA = V_mV × 1000 / 99`（AIPROPI 取 450 µA/A）。
+- 寄存器输出 0.1 A 分辨率整数 (deci-A)：`motor_current_a_deci = round(mA / 100)`，上限钳到 333 (= 33.3 A)。
 - 仅当电机在 FWD/REV 时刷值；SLEEP/WAKE/BRAKE/STOP 一律为 0。  
-- > 3 A 的强短路靠 DRV8874 自身的 IOCP 处理（datasheet IOCP = 6~10 A），IPROPI 路径在 2.93 A 处 ADC 饱和。
+- 电机任务以 10 ms 周期读取该瞬时值用于堵转判定；`AT+SENSE?` 仍按传感快照的 1 Hz 节奏发布，不代表保护只有 1 Hz。
 
 注意：
 
@@ -538,7 +544,7 @@ MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：
 - 七个固定窗口和运行和位于静态 RAM，不在 sensorTask 栈上创建快照；单路运行和最大为 20475。
 - 字段顺序固定为 `BATT_NTC,BATT_V,MCU_C,LM51770_C,MP4317_C,DRV8874_C,CHARGE_MOS_C,MOTOR_I,TICK,COUNT,STK_AT,STK_SENSOR,STK_MOTOR,TX_SP,TX_LS`；v3.2 不提供旧编号 NTC 字段的兼容别名。
 - MOTOR_I 由电机状态产生，sensorTask 每秒最多更新一次；上次残值不影响停机显示（电机模式 ≠ FWD/REV 时强制归零）。
-- MOTOR_I 参与即时过流保护，不使用五周期滑动平均。
+- MOTOR_I 参与堵转保护，不使用五周期滑动平均。
 - 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
 
 ### 5.6 故障查询命令
@@ -592,8 +598,39 @@ OK
 
 注意：
 
-- CURRENT_MA 基于 IPROPI 镜像电流公式换算 (`I_mA = V_mV × 1000 / 1125`)，单位为毫安整数。Vref=3.3V 下 IPROPI 路径的最大量程 ≈ 2.93 A（= 2933 mA），更高读数受 ADC 饱和限制。需 0.1 A 分辨率或停机归零语义请用 `AT+SENSE?` 的 `MOTOR_I` 字段。
-- 当电流读数超过当前阈值时，固件会转入制动并置位 OVERCURRENT。
+- CURRENT_MA 基于 220 Ω IPROPI 链路换算 (`I_mA = V_mV × 1000 / 99`)，单位为毫安整数。Vref=3.3V 下最大量程约 33.3 A。需 0.1 A 分辨率或停机归零语义请用 `AT+SENSE?` 的 `MOTOR_I` 字段。
+- 电机启动后先屏蔽 300 ms；随后每 10 ms 采样，连续不低于当前阈值 100 ms 才转入 BRAKE 并置位 OVERCURRENT。触发时 CURRENT_MA 保留该次停机电流。
+- 新的 FWD 或 REV 均会清除旧 OVERCURRENT 锁存并允许启动；若机械堵塞仍存在，屏蔽窗口结束后会再次触发。SLEEP/WAKE/BRAKE/STOP 不清除锁存。
+
+### 5.7.3 堵转阈值设置与查询
+
+设置请求（单位 mA，只接受 1000～30000 的无符号十进制整数）：
+
+```text
+AT+STALL_CURRENT=4000
+```
+
+成功响应：
+
+```text
+OK
+```
+
+查询请求与响应：
+
+```text
+AT+STALL_CURRENT=?
++STALL_CURRENT:4000
+OK
+```
+
+语义与限制：
+
+- 默认值为 4000 mA。设置成功后写入 STM32 最后一页 1 KiB Flash；记录含 magic、格式版本和 CRC32，未初始化或校验失败时上电回退到 4000 mA。
+- FWD/REV 时设置返回 `ERROR:MOTOR_RUNNING`，避免运行期间擦写 Flash；查询始终允许。设置相同值直接返回 `OK`，不重复擦写。
+- 擦除、半字编程或写后校验失败返回 `ERROR:FLASH_WRITE`；共享状态暂不可用返回 `ERROR:STATE_BUSY`。超范围、负数、小数、带单位或其他格式返回 `ERROR:PARSE`。
+- 阈值配置不改变当前运行阶段；由于只允许非运行时写入，下一次 FWD/REV 使用新值。
+- 软件停机不能替代 DRV8874 自身硬件保护、保险及机械限位。验证应使用较低阈值或可控负载，不故意制造理论 19 A 的硬堵转。
 
 ### 5.8 诊断查询命令
 
@@ -817,7 +854,7 @@ AT+DRIVE=ON
 
 ### 9.3 为什么 CURRENT_MA 看起来不像真实电流
 
-`CURRENT_MA` 已按 DRV8874 IPROPI 镜像电流和 R19=2.5kΩ 换算。ADC 满量程对应约 2.93 A，因此更高电流会饱和；3 A 以上的强短路主要由 DRV8874 硬件保护承担。
+`CURRENT_MA` 已按 DRV8874 IPROPI 镜像电流和 R19=220Ω 换算，3.3 V ADC 满量程约 33.3 A。确认 R19 实装值、ADC 参考电压和 IPROPI 连线；堵转保护默认阈值为 4000 mA，可用 `AT+STALL_CURRENT=?` 查询。
 
 ### 9.4 为什么透传数据丢了
 
