@@ -8,6 +8,7 @@
 #include "app_batt_ntc_table.h"
 #include "app_config.h"
 #include "app_motor.h"
+#include "app_motor_current.h"
 #include "app_ntc_table.h"
 #include "app_output.h"
 #include "app_runtime.h"
@@ -449,19 +450,14 @@ void App_SensorTask(void *argument)
 
             /* DRV8874 IPROPI 电流快照：仅当电机在 FWD/REV 时取 mA→dA 转换；
              * 其他模式 (SLEEP/WAKE/BRAKE/STOP/UNKNOWN) 一律写 0，
-             * 避免"电机已停但 SENSE 仍报残留电流"的误读。ADC 物理满量程 ≈2.93 A，
-             * 这里再钳一道到 29 dA 防万一读到的是过流瞬间的残值。*/
+             * 避免"电机已停但 SENSE 仍报残留电流"的误读。*/
             AppMotorStatus motor;
             uint32_t motor_deci = 0U;
             if (App_MotorTryGetStatus(&motor)
                 && ((motor.mode == APP_MOTOR_MODE_FORWARD)
                     || (motor.mode == APP_MOTOR_MODE_REVERSE)))
             {
-                motor_deci = (motor.current_ma + 50U) / 100U;
-                if (motor_deci > 29U)
-                {
-                    motor_deci = 29U;
-                }
+                motor_deci = App_MotorCurrentToDeciAmps(motor.current_ma);
             }
             next_snapshot.motor_current_a_deci = motor_deci;
 
