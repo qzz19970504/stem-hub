@@ -1,6 +1,7 @@
 #include "app_motor_stall_guard.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "app_config.h"

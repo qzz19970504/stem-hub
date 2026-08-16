@@ -414,14 +414,14 @@ $testOut = Join-Path $env:TEMP 'stem-hub-stall-tests'
 New-Item -ItemType Directory -Force -Path $testOut | Out-Null
 $nativeTests = @(
   @{Name='test_at_protocol'; Sources=@('tests/test_at_protocol.c','App/Src/app_at_protocol.c'); Includes=@('App/Inc')},
-  @{Name='test_at_command_guard'; Sources=@('tests/test_at_command_guard.c','App/Src/app_at_command_guard.c'); Includes=@('App/Inc')},
+  @{Name='test_at_command_guard'; Sources=@('tests/test_at_command_guard.c','App/Src/app_at_command_guard.c','App/Src/app_thermal_guard.c'); Includes=@('App/Inc')},
   @{Name='test_app_state'; Sources=@('tests/test_app_state.c','App/Src/app_state.c'); Includes=@('tests/stubs','App/Inc')},
   @{Name='test_adc_filter'; Sources=@('tests/test_adc_filter.c','App/Src/app_adc_filter.c'); Includes=@('App/Inc')},
   @{Name='test_power_path'; Sources=@('tests/test_power_path.c','App/Src/app_power_path.c'); Includes=@('App/Inc')},
   @{Name='test_charge_cycle'; Sources=@('tests/test_charge_cycle.c','App/Src/app_charge_cycle.c'); Includes=@('App/Inc')},
   @{Name='test_thermal_guard'; Sources=@('tests/test_thermal_guard.c','App/Src/app_thermal_guard.c'); Includes=@('App/Inc')},
   @{Name='test_sensor_thermal'; Sources=@('tests/test_sensor_thermal.c','App/Src/app_sensor_thermal.c','App/Src/app_thermal_guard.c'); Includes=@('App/Inc')},
-  @{Name='test_task_safety'; Sources=@('tests/test_task_safety.c','App/Src/app_task_safety.c'); Includes=@('App/Inc')},
+  @{Name='test_task_safety'; Sources=@('tests/test_task_safety.c','App/Src/app_task_safety.c','App/Src/app_thermal_guard.c'); Includes=@('App/Inc')},
   @{Name='test_uart_tunnel'; Sources=@('tests/test_uart_tunnel.c','App/Src/app_uart_tunnel.c'); Includes=@('App/Inc')},
   @{Name='test_batt_voltage_conversion'; Sources=@('tests/test_batt_voltage_conversion.c'); Includes=@('App/Inc')},
   @{Name='test_batt_ntc_temperature'; Sources=@('tests/test_batt_ntc_temperature.c'); Includes=@('App/Inc')},
@@ -434,7 +434,8 @@ $nativeTests = @(
 foreach ($test in $nativeTests) {
   $includeArgs = $test.Includes | ForEach-Object { '-I' + $_ }
   $output = Join-Path $testOut ($test.Name + '.exe')
-  & gcc -std=c11 -Wall -Wextra -Werror @includeArgs @($test.Sources) -o $output
+  $gccArgs = @('-std=c11','-Wall','-Wextra','-Werror') + @($includeArgs) + @($test.Sources) + @('-o',$output)
+  & gcc @gccArgs
   if ($LASTEXITCODE -ne 0) { throw "compile failed: $($test.Name)" }
   & $output
   if ($LASTEXITCODE -ne 0) { throw "test failed: $($test.Name)" }
