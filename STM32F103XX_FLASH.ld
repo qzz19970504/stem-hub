@@ -56,7 +56,8 @@ ENTRY(Reset_Handler)
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 20K
-FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 64K
+/* Final 1 KiB page at 0x0800FC00 is reserved for AppStallConfigRecord. */
+FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 63K
 }
 
 /* Highest address of the user mode stack */

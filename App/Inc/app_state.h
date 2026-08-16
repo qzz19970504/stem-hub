@@ -26,6 +26,8 @@ void App_StateSetOutputEnabled(AppOutputTarget target, bool enabled);
 
 bool App_StateSetChargeOnTimeSeconds(uint32_t seconds);
 bool App_StateTryGetChargeOnTimeSeconds(uint32_t *seconds);
+bool App_StateSetStallCurrentMa(uint32_t current_ma);
+bool App_StateTryGetStallCurrentMa(uint32_t *current_ma);
 bool App_StateSetThermalProtectionActive(bool active);
 bool App_StateTryGetThermalProtectionActive(bool *active);
 

@@ -21,25 +21,27 @@
 #define APP_UART_TX_TIMEOUT_MS 100U
 #define APP_ADC_TIMEOUT_MS 10U
 #define APP_SENSOR_PERIOD_MS 1000U
-#define APP_MOTOR_MONITOR_PERIOD_MS 100U
+#define APP_MOTOR_MONITOR_PERIOD_MS 10U
 #define APP_THERMAL_CONSUMER_CHECK_PERIOD_MS 100U
 #define APP_MOTOR_WAKE_DELAY_MS 5U
 #define APP_MOTOR_DIRECTION_DEADTIME_MS 20U
+#define APP_MOTOR_STALL_STARTUP_BLANKING_MS 300U
+#define APP_MOTOR_STALL_PERSISTENCE_MS 100U
+#define APP_MOTOR_STALL_MIN_CURRENT_MA 1000U
+#define APP_MOTOR_STALL_MAX_CURRENT_MA 30000U
+#define APP_MOTOR_STALL_DEFAULT_CURRENT_MA 4000U
 #define APP_ADC_VREF_MV 3300U
 #define APP_ADC_MAX_VALUE 4095U
-#define APP_MOTOR_OVERCURRENT_THRESHOLD_MA 3000U
-
 /* DRV8874 IPROPI 电流采样 (ADC2_IN8):
  * 拓扑: IPROPI -- [R19] -- GND。IPROPI 灌电流与低侧 MOSFET 电流按
  * AIPROPI (µA/A) 比例镜像。I_LOAD = V_IPROPI / (AIPROPI × R19)。
- * A=450µA/A, R19=2.5kΩ ⇒ 1.125 V/A。Vref=3.3V ⇒ 可测上限 ≈ 2.93 A
- * (ADC 在 ~2.93 A 时饱和；超过 3 A 的强短路靠 DRV8874 IOCP 处理，
- * 当前 ADC 路径只能汇报 ≤ 29.3 dA)。
- * AT+MOTOR? 输出 CURRENT_MA = millivolts * 1000 / 1125；
+ * A=450µA/A, R19=220Ω ⇒ 0.099 V/A。Vref=3.3V ⇒ 可测上限 ≈ 33.3 A。
+ * AT+MOTOR? 输出 CURRENT_MA = millivolts * 1000 / 99；
  * AT+SENSE? 输出 MOTOR_I = deci-A 整数 (= mA / 100 四舍五入)。
- * 见 app_motor_task.c::App_MotorConvertCurrent。*/
+ * 见 app_motor_current.c。*/
 #define APP_MOTOR_IPROPI_AIPROPI_UA_PER_A  450U
-#define APP_MOTOR_IPROPI_R19_OHMS         2500U
+#define APP_MOTOR_IPROPI_R19_OHMS          220U
+#define APP_MOTOR_CURRENT_MAX_DECI_A        333U
 
 /* Battery voltage divider: VBAT -- [R_TOP] --+-- [R_BOTTOM] -- GND
  *                                          |

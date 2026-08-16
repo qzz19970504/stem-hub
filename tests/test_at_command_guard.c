@@ -58,6 +58,12 @@ static void TestThermalProtectionAllowsSafeCommands(void)
     AppAtCommand motor_sleep = MakeMotorCommand(APP_MOTOR_MODE_SLEEP);
     AppAtCommand charge_time = { .type = APP_AT_COMMAND_SET_CHARGE_TIME };
     AppAtCommand query = { .type = APP_AT_COMMAND_QUERY_CHARGE_TIME };
+    AppAtCommand stall_current = {
+        .type = APP_AT_COMMAND_SET_STALL_CURRENT,
+    };
+    AppAtCommand stall_query = {
+        .type = APP_AT_COMMAND_QUERY_STALL_CURRENT,
+    };
 
     assert(App_AtCommandGuardEvaluate(&power_off, true, true)
            == APP_AT_COMMAND_GUARD_ALLOW);
@@ -70,6 +76,10 @@ static void TestThermalProtectionAllowsSafeCommands(void)
     assert(App_AtCommandGuardEvaluate(&charge_time, false, true)
            == APP_AT_COMMAND_GUARD_ALLOW);
     assert(App_AtCommandGuardEvaluate(&query, false, true)
+           == APP_AT_COMMAND_GUARD_ALLOW);
+    assert(App_AtCommandGuardEvaluate(&stall_current, false, true)
+           == APP_AT_COMMAND_GUARD_ALLOW);
+    assert(App_AtCommandGuardEvaluate(&stall_query, false, true)
            == APP_AT_COMMAND_GUARD_ALLOW);
 }
 

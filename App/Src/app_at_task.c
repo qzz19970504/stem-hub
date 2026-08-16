@@ -16,6 +16,7 @@
 #include "app_output.h"
 #include "app_runtime.h"
 #include "app_state.h"
+#include "app_stall_config_service.h"
 #include "app_sensor.h"
 
 /* task handle 在 freertos.c 里以 file-scope 全局定义；这里 extern 复用，
@@ -329,6 +330,24 @@ static void App_AtReplyChargeTime(void)
     App_RuntimeSendText(&huart1, buffer);
 }
 
+static void App_AtReplyStallCurrent(void)
+{
+    char buffer[64];
+    uint32_t current_ma = 0U;
+
+    if (!App_StateTryGetStallCurrentMa(&current_ma))
+    {
+        App_RuntimeSendError("STATE_BUSY");
+        return;
+    }
+
+    (void)snprintf(buffer,
+                   sizeof(buffer),
+                   "+STALL_CURRENT:%lu\r\nOK\r\n",
+                   (unsigned long)current_ma);
+    App_RuntimeSendText(&huart1, buffer);
+}
+
 static void App_AtHandleCommand(const AppAtCommand *command)
 {
     bool queued = false;
@@ -406,6 +425,32 @@ static void App_AtHandleCommand(const AppAtCommand *command)
             ? App_RuntimeSendOk()
             : App_RuntimeSendError("STATE_BUSY");
         break;
+    case APP_AT_COMMAND_SET_STALL_CURRENT:
+    {
+        AppStallConfigSetResult result =
+            App_StallConfigServiceSetCurrentMa(
+                command->data.stall_current.current_ma);
+
+        switch (result)
+        {
+        case APP_STALL_CONFIG_SET_OK:
+            App_RuntimeSendOk();
+            break;
+        case APP_STALL_CONFIG_SET_STATE_BUSY:
+            App_RuntimeSendError("STATE_BUSY");
+            break;
+        case APP_STALL_CONFIG_SET_MOTOR_RUNNING:
+            App_RuntimeSendError("MOTOR_RUNNING");
+            break;
+        case APP_STALL_CONFIG_SET_FLASH_WRITE_FAILED:
+            App_RuntimeSendError("FLASH_WRITE");
+            break;
+        default:
+            App_RuntimeSendError("STALL_CONFIG");
+            break;
+        }
+        break;
+    }
     case APP_AT_COMMAND_SEND_UART:
         App_AtSendUartPayload(&command->data.uart_payload);
         break;
@@ -426,6 +471,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         break;
     case APP_AT_COMMAND_QUERY_CHARGE_TIME:
         App_AtReplyChargeTime();
+        break;
+    case APP_AT_COMMAND_QUERY_STALL_CURRENT:
+        App_AtReplyStallCurrent();
         break;
     default:
         App_RuntimeSendError("UNSUPPORTED");

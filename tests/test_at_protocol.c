@@ -43,6 +43,16 @@ static void expect_charge_time_command(const char *line, uint32_t expected_secon
     assert(command.data.charge_time.seconds == expected_seconds);
 }
 
+static void expect_stall_current_command(const char *line,
+                                         uint32_t expected_current_ma)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == APP_AT_COMMAND_SET_STALL_CURRENT);
+    assert(command.data.stall_current.current_ma == expected_current_ma);
+}
+
 static void build_maximum_length_charge_time_line(char *line, const char *value)
 {
     static const char prefix[] = "AT+CHARGE_TIME=";
@@ -114,6 +124,21 @@ int main(void)
     expect_charge_time_command("AT+CHARGE_TIME=10\r\n", 10U);
     expect_charge_time_command("AT+CHARGE_TIME=60\r\n", 60U);
     expect_query_command("AT+CHARGE_TIME=?\r\n", APP_AT_COMMAND_QUERY_CHARGE_TIME);
+
+    expect_stall_current_command("AT+STALL_CURRENT=1000\r\n", 1000U);
+    expect_stall_current_command("AT+STALL_CURRENT=4000\r\n", 4000U);
+    expect_stall_current_command("AT+STALL_CURRENT=30000\r\n", 30000U);
+    expect_query_command("AT+STALL_CURRENT=?\r\n",
+                         APP_AT_COMMAND_QUERY_STALL_CURRENT);
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=999\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=30001\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=-4000\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=4.0\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=4000MA\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+STALL_CURRENT=+4000\r\n", &command));
+    assert(!AppAtProtocol_Parse(
+        "AT+STALL_CURRENT=42949672960\r\n", &command));
 
     build_maximum_length_charge_time_line(maximum_length_charge_time_60, "60");
     expect_charge_time_command(maximum_length_charge_time_60, 60U);
