@@ -37,6 +37,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_stall_guard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config_flash.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config_service.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_charge_cycle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_thermal_guard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_task_safety.c

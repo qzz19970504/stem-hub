@@ -5,6 +5,8 @@
 
 #include "app_config.h"
 #include "app_runtime.h"
+#include "app_stall_config.h"
+#include "app_state.h"
 
 AppRuntime g_app_runtime = {0};
 
@@ -105,6 +107,11 @@ void App_RuntimeInit(void)
     HAL_GPIO_WritePin(nSLEEP_GPIO_Port, nSLEEP_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(EN_IN1_GPIO_Port, EN_IN1_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(PH_IN2_GPIO_Port, PH_IN2_Pin, GPIO_PIN_RESET);
+
+    if (!App_StateSetStallCurrentMa(App_StallConfigLoadCurrentMa()))
+    {
+        Error_Handler();
+    }
 
     App_RuntimeStartUart1Receive();
     App_RuntimeStartBridgeReceive();
