@@ -6,3 +6,4 @@ mx.scratch
 *.exe
 *.local.json
 .claude/worktrees/
+.worktrees/
