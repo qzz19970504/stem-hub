@@ -7,7 +7,8 @@
 #include "app_at_protocol.h"
 #include "app_types.h"
 
-void App_StateSetBridgeEnabled(AppBridgeTarget target, bool enabled);
+void App_StateSelectBridgeTarget(AppBridgeTarget target);
+void App_StateClearBridgeTarget(void);
 void App_StateGetBridgeEnabled(bool *uart2_enabled, bool *uart3_enabled);
 
 bool App_StateTryGetSensorSnapshot(AppSensorSnapshot *snapshot);

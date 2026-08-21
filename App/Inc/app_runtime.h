@@ -89,6 +89,7 @@ typedef struct
     osSemaphoreId_t bridge_rx_semaphore;
     osSemaphoreId_t sensor_ready_semaphore;
     osMutexId_t uart_tx_mutex;
+    osMutexId_t bridge_mutex;
     osMutexId_t sensor_mutex;
     osMutexId_t adc2_mutex;
     osMutexId_t state_mutex;
@@ -119,6 +120,10 @@ bool App_RuntimePushUart1Byte(uint8_t byte);
 bool App_RuntimePopUart1Byte(uint8_t *byte);
 bool App_RuntimePopBridgeByte(uint8_t uart_index, uint8_t *byte);
 void App_RuntimeFlushBridgeRx(uint8_t uart_index);
+void App_RuntimeSelectBridgeTarget(AppBridgeTarget target);
+void App_RuntimeClearBridgeTarget(void);
+void App_RuntimeLockBridge(void);
+void App_RuntimeUnlockBridge(void);
 uint32_t App_RuntimeRawToMillivolts(uint16_t raw);
 bool App_RuntimeReadChannel(ADC_HandleTypeDef *adc, uint32_t channel, uint16_t *raw_value);
 bool App_RuntimeReadAdc2Channel(uint32_t channel, uint16_t *raw_value);

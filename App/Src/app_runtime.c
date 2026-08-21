@@ -34,6 +34,7 @@ void App_RuntimeCreateObjects(void)
         osSemaphoreNew(APP_UART_BRIDGE_RING_BUFFER_SIZE * 2U, 0U, NULL);
     g_app_runtime.sensor_ready_semaphore = osSemaphoreNew(1U, 0U, NULL);
     g_app_runtime.uart_tx_mutex = osMutexNew(NULL);
+    g_app_runtime.bridge_mutex = osMutexNew(NULL);
     g_app_runtime.sensor_mutex = osMutexNew(NULL);
     g_app_runtime.adc2_mutex = osMutexNew(NULL);
     g_app_runtime.state_mutex = osMutexNew(NULL);
@@ -45,6 +46,7 @@ void App_RuntimeCreateObjects(void)
     App_RuntimeFailFastIfNull(g_app_runtime.bridge_rx_semaphore);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_ready_semaphore);
     App_RuntimeFailFastIfNull(g_app_runtime.uart_tx_mutex);
+    App_RuntimeFailFastIfNull(g_app_runtime.bridge_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.sensor_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.adc2_mutex);
     App_RuntimeFailFastIfNull(g_app_runtime.state_mutex);
@@ -338,6 +340,40 @@ void App_RuntimeFlushBridgeRx(uint8_t uart_index)
         g_app_runtime.uart3_tail = g_app_runtime.uart3_head;
     }
     __set_PRIMASK(primask);
+}
+
+void App_RuntimeLockBridge(void)
+{
+    if (osMutexAcquire(g_app_runtime.bridge_mutex, osWaitForever) != osOK)
+    {
+        Error_Handler();
+    }
+}
+
+void App_RuntimeUnlockBridge(void)
+{
+    if (osMutexRelease(g_app_runtime.bridge_mutex) != osOK)
+    {
+        Error_Handler();
+    }
+}
+
+void App_RuntimeSelectBridgeTarget(AppBridgeTarget target)
+{
+    App_RuntimeLockBridge();
+    App_StateSelectBridgeTarget(target);
+    App_RuntimeFlushBridgeRx(2U);
+    App_RuntimeFlushBridgeRx(3U);
+    App_RuntimeUnlockBridge();
+}
+
+void App_RuntimeClearBridgeTarget(void)
+{
+    App_RuntimeLockBridge();
+    App_StateClearBridgeTarget();
+    App_RuntimeFlushBridgeRx(2U);
+    App_RuntimeFlushBridgeRx(3U);
+    App_RuntimeUnlockBridge();
 }
 
 bool App_RuntimeReadChannel(ADC_HandleTypeDef *adc, uint32_t channel, uint16_t *raw_value)

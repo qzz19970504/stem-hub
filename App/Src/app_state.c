@@ -35,22 +35,30 @@ static AppState g_app_state = {
     .thermal_protection_active = false,
 };
 
-void App_StateSetBridgeEnabled(AppBridgeTarget target, bool enabled)
+void App_StateSelectBridgeTarget(AppBridgeTarget target)
 {
     if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
     {
         return;
     }
 
-    if ((target == APP_BRIDGE_TARGET_UART2) || (target == APP_BRIDGE_TARGET_UART23))
+    g_app_state.bridge_uart2_enabled = (target == APP_BRIDGE_TARGET_UART2)
+        || (target == APP_BRIDGE_TARGET_UART23);
+    g_app_state.bridge_uart3_enabled = (target == APP_BRIDGE_TARGET_UART3)
+        || (target == APP_BRIDGE_TARGET_UART23);
+
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+}
+
+void App_StateClearBridgeTarget(void)
+{
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
     {
-        g_app_state.bridge_uart2_enabled = enabled;
+        return;
     }
 
-    if ((target == APP_BRIDGE_TARGET_UART3) || (target == APP_BRIDGE_TARGET_UART23))
-    {
-        g_app_state.bridge_uart3_enabled = enabled;
-    }
+    g_app_state.bridge_uart2_enabled = false;
+    g_app_state.bridge_uart3_enabled = false;
 
     (void)osMutexRelease(g_app_runtime.state_mutex);
 }

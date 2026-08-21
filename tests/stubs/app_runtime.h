@@ -6,6 +6,7 @@
 typedef struct
 {
     osSemaphoreId_t sensor_ready_semaphore;
+    osMutexId_t bridge_mutex;
     osMutexId_t sensor_mutex;
     osMutexId_t state_mutex;
 } AppRuntime;

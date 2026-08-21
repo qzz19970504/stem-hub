@@ -167,6 +167,32 @@ static void TestMissingStateMutexFailsSafely(void)
     g_app_runtime.state_mutex = state_mutex;
 }
 
+static void TestBridgeTargetSelectionReplacesPreviousState(void)
+{
+    bool uart2_enabled = false;
+    bool uart3_enabled = false;
+
+    App_StateSelectBridgeTarget(APP_BRIDGE_TARGET_UART2);
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    assert(uart2_enabled);
+    assert(!uart3_enabled);
+
+    App_StateSelectBridgeTarget(APP_BRIDGE_TARGET_UART3);
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    assert(!uart2_enabled);
+    assert(uart3_enabled);
+
+    App_StateSelectBridgeTarget(APP_BRIDGE_TARGET_UART23);
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    assert(uart2_enabled);
+    assert(uart3_enabled);
+
+    App_StateClearBridgeTarget();
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    assert(!uart2_enabled);
+    assert(!uart3_enabled);
+}
+
 int main(void)
 {
     TestChargeTimeDefaultsToTenSeconds();
@@ -178,5 +204,6 @@ int main(void)
     TestStallCurrentRejectsOutOfRangeWithoutChangingState();
     TestTryGetReportsInvalidOutputAndBusyState();
     TestMissingStateMutexFailsSafely();
+    TestBridgeTargetSelectionReplacesPreviousState();
     return 0;
 }
