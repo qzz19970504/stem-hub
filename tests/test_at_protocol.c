@@ -5,16 +5,14 @@
 
 #include "app_at_protocol.h"
 
-static void expect_bridge_command(const char *line,
-                                  AppBridgeTarget expected_target,
-                                  bool expected_enabled)
+static void expect_transparent_command(const char *line,
+                                       AppBridgeTarget expected_target)
 {
     AppAtCommand command = {0};
 
     assert(AppAtProtocol_Parse(line, &command));
-    assert(command.type == APP_AT_COMMAND_SET_BRIDGE);
-    assert(command.data.bridge.target == expected_target);
-    assert(command.data.bridge.enabled == expected_enabled);
+    assert(command.type == APP_AT_COMMAND_START_TRANSPARENT);
+    assert(command.data.transparent.target == expected_target);
 }
 
 static void expect_query_command(const char *line, AppAtCommandType expected_type)
@@ -98,9 +96,19 @@ int main(void)
         0x18U, 0x19U, 0x1AU, 0x1BU, 0x1CU, 0x1DU, 0x1EU, 0x1FU
     };
 
-    expect_bridge_command("AT+UART2=ON\r\n", APP_BRIDGE_TARGET_UART2, true);
-    expect_bridge_command("AT+UART3=OFF\r\n", APP_BRIDGE_TARGET_UART3, false);
-    expect_bridge_command("AT+UART2&3=ON\r\n", APP_BRIDGE_TARGET_UART23, true);
+    expect_transparent_command("AT+TRANS=1\r\n", APP_BRIDGE_TARGET_UART2);
+    expect_transparent_command("AT+TRANS=2\r\n", APP_BRIDGE_TARGET_UART3);
+    expect_transparent_command("AT+TRANS=1&2\r\n", APP_BRIDGE_TARGET_UART23);
+    assert(!AppAtProtocol_Parse("AT+TRANS=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+TRANS=3\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART2=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART2=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART3=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART3=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART2&3=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART2&3=OFF\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART23=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+UART23=OFF\r\n", &command));
 
     assert(AppAtProtocol_Parse("AT+LED=OFF\r\n", &command));
     assert(command.type == APP_AT_COMMAND_SET_LED_MASTER);

@@ -341,31 +341,25 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
-    if (AppAtProtocol_MatchAssignment("AT+UART2=", command_body, &value)
-        && AppAtProtocol_ParseOnOff(value, &enabled))
+    if (AppAtProtocol_MatchAssignment("AT+TRANS=", command_body, &value))
     {
-        out_command->type = APP_AT_COMMAND_SET_BRIDGE;
-        out_command->data.bridge.target = APP_BRIDGE_TARGET_UART2;
-        out_command->data.bridge.enabled = enabled;
-        return true;
-    }
-
-    if (AppAtProtocol_MatchAssignment("AT+UART3=", command_body, &value)
-        && AppAtProtocol_ParseOnOff(value, &enabled))
-    {
-        out_command->type = APP_AT_COMMAND_SET_BRIDGE;
-        out_command->data.bridge.target = APP_BRIDGE_TARGET_UART3;
-        out_command->data.bridge.enabled = enabled;
-        return true;
-    }
-
-    if ((AppAtProtocol_MatchAssignment("AT+UART2&3=", command_body, &value)
-         || AppAtProtocol_MatchAssignment("AT+UART23=", command_body, &value))
-        && AppAtProtocol_ParseOnOff(value, &enabled))
-    {
-        out_command->type = APP_AT_COMMAND_SET_BRIDGE;
-        out_command->data.bridge.target = APP_BRIDGE_TARGET_UART23;
-        out_command->data.bridge.enabled = enabled;
+        out_command->type = APP_AT_COMMAND_START_TRANSPARENT;
+        if (strcmp(value, "1") == 0)
+        {
+            out_command->data.transparent.target = APP_BRIDGE_TARGET_UART2;
+        }
+        else if (strcmp(value, "2") == 0)
+        {
+            out_command->data.transparent.target = APP_BRIDGE_TARGET_UART3;
+        }
+        else if (strcmp(value, "1&2") == 0)
+        {
+            out_command->data.transparent.target = APP_BRIDGE_TARGET_UART23;
+        }
+        else
+        {
+            return false;
+        }
         return true;
     }
 

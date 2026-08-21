@@ -34,7 +34,7 @@ typedef enum
 typedef enum
 {
     APP_AT_COMMAND_NONE = 0,
-    APP_AT_COMMAND_SET_BRIDGE,
+    APP_AT_COMMAND_START_TRANSPARENT,
     APP_AT_COMMAND_SET_LED_MASTER,
     APP_AT_COMMAND_SET_MOTOR_MODE,
     APP_AT_COMMAND_SET_NMOS1,
@@ -55,8 +55,7 @@ typedef enum
 typedef struct
 {
     AppBridgeTarget target;
-    bool enabled;
-} AppAtBridgeCommand;
+} AppAtTransparentCommand;
 
 typedef struct
 {
@@ -94,7 +93,7 @@ typedef struct
     AppAtCommandType type;
     union
     {
-        AppAtBridgeCommand bridge;
+        AppAtTransparentCommand transparent;
         AppAtBooleanCommand led;
         AppAtBooleanCommand output;
         AppAtMotorCommand motor;
