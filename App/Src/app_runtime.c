@@ -7,12 +7,17 @@
 #include "app_runtime.h"
 #include "app_stall_config.h"
 #include "app_state.h"
+#include "app_uart_chunk_queue.h"
+#include "task.h"
 
 AppRuntime g_app_runtime = {0};
 
 /* 诊断计数器：所有字段在 ISR/任务里自增，必须是 volatile 以避免编译器优化丢更新。
  * 读侧通过 App_RuntimeGetDiag 拷一份快照出来。 */
 static volatile AppRuntimeDiag g_app_diag = {0};
+static AppUartChunkQueue g_uart1_chunk_queue;
+static bool g_uart1_next_chunk_silence_before = true;
+static volatile bool g_uart1_rx_overflowed = false;
 
 /* USART1 IRQ 入口自增（stm32f1xx_it.c），与 HAL 层完全解耦。*/
 volatile uint32_t g_app_diag_usart1_isr_count = 0;
@@ -29,6 +34,13 @@ static void App_RuntimeFailFastIfNull(const void *handle)
 
 void App_RuntimeCreateObjects(void)
 {
+    if (!AppUartChunkQueue_Init(&g_uart1_chunk_queue))
+    {
+        Error_Handler();
+    }
+    g_uart1_next_chunk_silence_before = true;
+    g_uart1_rx_overflowed = false;
+
     g_app_runtime.uart1_rx_semaphore = osSemaphoreNew(APP_UART1_RING_BUFFER_SIZE, 0U, NULL);
     g_app_runtime.bridge_rx_semaphore =
         osSemaphoreNew(APP_UART_BRIDGE_RING_BUFFER_SIZE * 2U, 0U, NULL);
@@ -57,7 +69,9 @@ void App_RuntimeCreateObjects(void)
 
 void App_RuntimeStartUart1Receive(void)
 {
-    if (HAL_UART_Receive_IT(&huart1, &g_app_runtime.uart1_rx_byte, 1U) != HAL_OK)
+    if (HAL_UARTEx_ReceiveToIdle_IT(&huart1,
+                                    g_app_runtime.uart1_rx_chunk,
+                                    sizeof(g_app_runtime.uart1_rx_chunk)) != HAL_OK)
     {
         extern void App_RecordFailureAndPrint(uint32_t hint, uint32_t lr_value);
         App_RecordFailureAndPrint(0xE11E0002U, (uint32_t)__builtin_return_address(0));
@@ -217,7 +231,7 @@ void App_RuntimeSendError(const char *reason)
     App_RuntimeSendText(&huart1, buffer);
 }
 
-bool App_RuntimePushUart1Byte(uint8_t byte)
+static bool App_RuntimePushUart1Byte(uint8_t byte)
 {
     uint16_t next_head = (uint16_t)((g_app_runtime.uart1_head + 1U) % APP_UART1_RING_BUFFER_SIZE);
 
@@ -226,6 +240,7 @@ bool App_RuntimePushUart1Byte(uint8_t byte)
     if (next_head == g_app_runtime.uart1_tail)
     {
         g_app_diag.rx_overflow_count++;
+        g_uart1_rx_overflowed = true;
         return false;
     }
 
@@ -235,16 +250,64 @@ bool App_RuntimePushUart1Byte(uint8_t byte)
     return true;
 }
 
-bool App_RuntimePopUart1Byte(uint8_t *byte)
+bool App_RuntimePopUart1Chunk(uint8_t *bytes,
+                             size_t capacity,
+                             size_t *length,
+                             bool *silence_before,
+                             bool *silence_after)
 {
-    if ((byte == NULL) || (g_app_runtime.uart1_tail == g_app_runtime.uart1_head))
+    AppUartChunk chunk;
+    size_t byte_index;
+
+    if ((bytes == NULL) || (capacity < APP_UART1_RX_CHUNK_SIZE)
+        || (length == NULL) || (silence_before == NULL)
+        || (silence_after == NULL) || g_uart1_rx_overflowed
+        || AppUartChunkQueue_HasOverflowed(&g_uart1_chunk_queue))
     {
         return false;
     }
 
-    *byte = g_app_runtime.uart1_ring[g_app_runtime.uart1_tail];
-    g_app_runtime.uart1_tail = (uint16_t)((g_app_runtime.uart1_tail + 1U) % APP_UART1_RING_BUFFER_SIZE);
+    if (!AppUartChunkQueue_Pop(&g_uart1_chunk_queue, &chunk))
+    {
+        return false;
+    }
+
+    for (byte_index = 0U; byte_index < chunk.length; ++byte_index)
+    {
+        if (g_app_runtime.uart1_tail == g_app_runtime.uart1_head)
+        {
+            Error_Handler();
+            return false;
+        }
+
+        bytes[byte_index] = g_app_runtime.uart1_ring[g_app_runtime.uart1_tail];
+        g_app_runtime.uart1_tail =
+            (uint16_t)((g_app_runtime.uart1_tail + 1U) % APP_UART1_RING_BUFFER_SIZE);
+    }
+
+    *length = chunk.length;
+    *silence_before = chunk.silence_before;
+    *silence_after = chunk.silence_after;
     return true;
+}
+
+bool App_RuntimeConsumeUart1Overflow(void)
+{
+    bool has_overflowed;
+
+    taskENTER_CRITICAL();
+    has_overflowed = g_uart1_rx_overflowed
+        || AppUartChunkQueue_HasOverflowed(&g_uart1_chunk_queue);
+    if (has_overflowed)
+    {
+        g_app_runtime.uart1_tail = g_app_runtime.uart1_head;
+        AppUartChunkQueue_Reset(&g_uart1_chunk_queue);
+        g_uart1_next_chunk_silence_before = true;
+        g_uart1_rx_overflowed = false;
+    }
+    taskEXIT_CRITICAL();
+
+    return has_overflowed;
 }
 
 static bool App_RuntimePushBridgeByte(uint8_t uart_index, uint8_t byte)
@@ -510,18 +573,7 @@ void App_CoreInit(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == USART1)
-    {
-        (void)App_RuntimePushUart1Byte(g_app_runtime.uart1_rx_byte);
-
-        if (g_app_runtime.uart1_rx_semaphore != NULL)
-        {
-            (void)osSemaphoreRelease(g_app_runtime.uart1_rx_semaphore);
-        }
-
-        App_RuntimeStartUart1Receive();
-    }
-    else if (huart->Instance == USART2)
+    if (huart->Instance == USART2)
     {
         (void)App_RuntimePushBridgeByte(2U, g_app_runtime.uart2_rx_byte);
         if (g_app_runtime.bridge_rx_semaphore != NULL)
@@ -539,6 +591,57 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         }
         (void)HAL_UART_Receive_IT(&huart3, &g_app_runtime.uart3_rx_byte, 1U);
     }
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t received_length)
+{
+    const bool silence_after = (huart != NULL)
+        && (HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_IDLE);
+    bool all_bytes_pushed = true;
+    uint16_t byte_index;
+
+    if ((huart == NULL) || (huart->Instance != USART1))
+    {
+        return;
+    }
+
+    if (received_length > sizeof(g_app_runtime.uart1_rx_chunk))
+    {
+        g_app_diag.rx_overflow_count++;
+        g_uart1_rx_overflowed = true;
+        all_bytes_pushed = false;
+    }
+    else
+    {
+        for (byte_index = 0U; byte_index < received_length; ++byte_index)
+        {
+            if (!App_RuntimePushUart1Byte(g_app_runtime.uart1_rx_chunk[byte_index]))
+            {
+                all_bytes_pushed = false;
+            }
+        }
+    }
+
+    if (received_length > 0U)
+    {
+        if (all_bytes_pushed
+            && !AppUartChunkQueue_Push(&g_uart1_chunk_queue,
+                                       received_length,
+                                       g_uart1_next_chunk_silence_before,
+                                       silence_after))
+        {
+            g_app_diag.rx_overflow_count++;
+            g_uart1_rx_overflowed = true;
+        }
+
+        if (g_app_runtime.uart1_rx_semaphore != NULL)
+        {
+            (void)osSemaphoreRelease(g_app_runtime.uart1_rx_semaphore);
+        }
+    }
+
+    g_uart1_next_chunk_silence_before = silence_after;
+    App_RuntimeStartUart1Receive();
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -566,9 +669,14 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
             g_app_diag.rx_pe_count++;
         }
 
-        App_RuntimeRearmReceiveIfReady(
-            &huart1,
-            &g_app_runtime.uart1_rx_byte);
+        g_uart1_rx_overflowed = true;
+        g_uart1_next_chunk_silence_before = true;
+        if (g_app_runtime.uart1_rx_semaphore != NULL)
+        {
+            (void)osSemaphoreRelease(g_app_runtime.uart1_rx_semaphore);
+        }
+        (void)HAL_UART_AbortReceive(&huart1);
+        App_RuntimeStartUart1Receive();
     }
     else if (huart->Instance == USART2)
     {

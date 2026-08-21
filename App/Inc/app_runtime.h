@@ -2,6 +2,7 @@
 #define APP_RUNTIME_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "adc.h"
@@ -73,7 +74,7 @@ typedef struct
 
 typedef struct
 {
-    uint8_t uart1_rx_byte;
+    uint8_t uart1_rx_chunk[APP_UART1_RX_CHUNK_SIZE];
     volatile uint16_t uart1_head;
     volatile uint16_t uart1_tail;
     uint8_t uart1_ring[APP_UART1_RING_BUFFER_SIZE];
@@ -116,8 +117,12 @@ HAL_StatusTypeDef App_RuntimeSendBytes(UART_HandleTypeDef *uart,
 void App_RuntimeSendText(UART_HandleTypeDef *uart, const char *text);
 void App_RuntimeSendOk(void);
 void App_RuntimeSendError(const char *reason);
-bool App_RuntimePushUart1Byte(uint8_t byte);
-bool App_RuntimePopUart1Byte(uint8_t *byte);
+bool App_RuntimePopUart1Chunk(uint8_t *bytes,
+                             size_t capacity,
+                             size_t *length,
+                             bool *silence_before,
+                             bool *silence_after);
+bool App_RuntimeConsumeUart1Overflow(void);
 bool App_RuntimePopBridgeByte(uint8_t uart_index, uint8_t *byte);
 void App_RuntimeFlushBridgeRx(uint8_t uart_index);
 void App_RuntimeSelectBridgeTarget(AppBridgeTarget target);
