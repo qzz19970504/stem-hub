@@ -12,41 +12,20 @@
 #include "app_at_command_guard.h"
 #include "app_config.h"
 #include "app_led.h"
+#include "app_line_reader.h"
 #include "app_motor.h"
 #include "app_output.h"
 #include "app_runtime.h"
 #include "app_state.h"
 #include "app_stall_config_service.h"
 #include "app_sensor.h"
+#include "app_transparent_mode.h"
 
 /* task handle 在 freertos.c 里以 file-scope 全局定义；这里 extern 复用，
  * 不引入新头文件依赖，避免触动 CubeMX USER CODE 块。*/
 extern osThreadId_t atTaskHandle;
 extern osThreadId_t sensorTaskHandle;
 extern osThreadId_t motorTaskHandle;
-
-static void App_AtForwardLine(const char *line)
-{
-    bool uart2_enabled = false;
-    bool uart3_enabled = false;
-
-    if (line == NULL)
-    {
-        return;
-    }
-
-    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
-
-    if (uart2_enabled)
-    {
-        App_RuntimeSendText(&huart2, line);
-    }
-
-    if (uart3_enabled)
-    {
-        App_RuntimeSendText(&huart3, line);
-    }
-}
 
 static void App_AtSendUartPayload(const AppAtUartPayloadCommand *payload)
 {
@@ -348,7 +327,8 @@ static void App_AtReplyStallCurrent(void)
     App_RuntimeSendText(&huart1, buffer);
 }
 
-static void App_AtHandleCommand(const AppAtCommand *command)
+static void App_AtHandleCommand(const AppAtCommand *command,
+                                AppTransparentMode *transparent_mode)
 {
     bool queued = false;
     bool thermal_protection_active = false;
@@ -383,23 +363,12 @@ static void App_AtHandleCommand(const AppAtCommand *command)
 
     switch (command->type)
     {
-    case APP_AT_COMMAND_SET_BRIDGE:
-        App_StateSetBridgeEnabled(command->data.bridge.target, command->data.bridge.enabled);
-        if (!command->data.bridge.enabled)
-        {
-            if ((command->data.bridge.target == APP_BRIDGE_TARGET_UART2)
-                || (command->data.bridge.target == APP_BRIDGE_TARGET_UART23))
-            {
-                App_RuntimeFlushBridgeRx(2U);
-            }
-            if ((command->data.bridge.target == APP_BRIDGE_TARGET_UART3)
-                || (command->data.bridge.target == APP_BRIDGE_TARGET_UART23))
-            {
-                App_RuntimeFlushBridgeRx(3U);
-            }
-        }
+    case APP_AT_COMMAND_START_TRANSPARENT:
         App_RuntimeSendOk();
-        break;
+        App_RuntimeSelectBridgeTarget(command->data.transparent.target);
+        AppTransparentMode_Enter(transparent_mode,
+                                 command->data.transparent.target);
+        return;
     case APP_AT_COMMAND_SET_LED_MASTER:
         queued = App_LedEnqueueState(command->data.led.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("LED_QUEUE");
@@ -481,7 +450,8 @@ static void App_AtHandleCommand(const AppAtCommand *command)
     }
 }
 
-static void App_AtProcessLine(const char *line)
+static void App_AtProcessLine(const char *line,
+                              AppTransparentMode *transparent_mode)
 {
     AppAtCommand command = {0};
 
@@ -494,7 +464,7 @@ static void App_AtProcessLine(const char *line)
     {
         if (AppAtProtocol_Parse(line, &command))
         {
-            App_AtHandleCommand(&command);
+            App_AtHandleCommand(&command, transparent_mode);
         }
         else
         {
@@ -505,7 +475,6 @@ static void App_AtProcessLine(const char *line)
 
     if (!AppAtProtocol_IsAtCommand(line))
     {
-        App_AtForwardLine(line);
         return;
     }
 
@@ -515,17 +484,119 @@ static void App_AtProcessLine(const char *line)
         return;
     }
 
-    App_AtHandleCommand(&command);
+    App_AtHandleCommand(&command, transparent_mode);
+}
+
+static void App_AtForwardBytes(const uint8_t *bytes, size_t length)
+{
+    bool uart2_enabled = false;
+    bool uart3_enabled = false;
+
+    if ((bytes == NULL) || (length == 0U) || (length > UINT16_MAX))
+    {
+        return;
+    }
+
+    App_StateGetBridgeEnabled(&uart2_enabled, &uart3_enabled);
+    if (uart2_enabled)
+    {
+        (void)App_RuntimeSendBytes(&huart2,
+                                   bytes,
+                                   (uint16_t)length,
+                                   APP_UART_TX_TIMEOUT_MS);
+    }
+    if (uart3_enabled)
+    {
+        (void)App_RuntimeSendBytes(&huart3,
+                                   bytes,
+                                   (uint16_t)length,
+                                   APP_UART_TX_TIMEOUT_MS);
+    }
+}
+
+static void App_AtProcessTransparentChunk(AppTransparentMode *transparent_mode,
+                                          const uint8_t *bytes,
+                                          size_t length,
+                                          bool silence_before,
+                                          bool silence_after)
+{
+    AppTransparentResult result;
+
+    if (!AppTransparentMode_ProcessChunk(transparent_mode,
+                                         bytes,
+                                         length,
+                                         silence_before,
+                                         silence_after,
+                                         &result))
+    {
+        return;
+    }
+
+    App_AtForwardBytes(result.forward, result.forward_length);
+    if (result.exited)
+    {
+        App_RuntimeClearBridgeTarget();
+        App_RuntimeSendOk();
+    }
+}
+
+static void App_AtConsumeBytes(AppLineReader *line_reader,
+                               AppTransparentMode *transparent_mode,
+                               const uint8_t *bytes,
+                               size_t length,
+                               bool silence_after)
+{
+    size_t byte_index;
+
+    for (byte_index = 0U; byte_index < length; ++byte_index)
+    {
+        const AppLineReaderStatus status =
+            AppLineReader_Push(line_reader, bytes[byte_index]);
+
+        if (status == APP_LINE_READER_TOO_LONG)
+        {
+            App_RuntimeNoteLineTooLong();
+            App_RuntimeSendError("LINE_TOO_LONG");
+            continue;
+        }
+
+        if (status == APP_LINE_READER_COMPLETE)
+        {
+            App_AtProcessLine(AppLineReader_GetLine(line_reader),
+                              transparent_mode);
+            AppLineReader_Reset(line_reader);
+
+            if (AppTransparentMode_IsActive(transparent_mode)
+                && ((byte_index + 1U) < length))
+            {
+                App_AtProcessTransparentChunk(transparent_mode,
+                                              &bytes[byte_index + 1U],
+                                              length - byte_index - 1U,
+                                              false,
+                                              silence_after);
+                return;
+            }
+        }
+    }
 }
 
 void App_AtTask(void *argument)
 {
+    static AppTransparentMode transparent_mode;
+    static uint8_t chunk[APP_UART1_RX_CHUNK_SIZE];
     char line_buffer[APP_UART1_LINE_BUFFER_SIZE];
-    size_t line_length = 0U;
-    uint8_t byte = 0U;
-    bool saw_carriage_return = false;
+    AppLineReader line_reader = {0};
+    size_t chunk_length = 0U;
+    bool silence_before = false;
+    bool silence_after = false;
 
     (void)argument;
+
+    if (!AppLineReader_Init(&line_reader, line_buffer, sizeof(line_buffer)))
+    {
+        Error_Handler();
+    }
+    AppTransparentMode_Init(&transparent_mode);
 
     for (;;)
     {
@@ -536,33 +607,39 @@ void App_AtTask(void *argument)
 
         App_RuntimeNoteAtLoop();
 
-        while (App_RuntimePopUart1Byte(&byte))
+        if (App_RuntimeConsumeUart1Overflow())
         {
-            if (line_length + 1U >= sizeof(line_buffer))
+            if (AppTransparentMode_IsActive(&transparent_mode))
             {
-                line_length = 0U;
-                saw_carriage_return = false;
-                App_RuntimeNoteLineTooLong();
-                App_RuntimeSendError("LINE_TOO_LONG");
+                AppTransparentMode_Abort(&transparent_mode);
+                App_RuntimeClearBridgeTarget();
+            }
+            AppLineReader_Reset(&line_reader);
+            App_RuntimeSendError("RX_OVERFLOW");
+            continue;
+        }
+
+        while (App_RuntimePopUart1Chunk(chunk,
+                                       sizeof(chunk),
+                                       &chunk_length,
+                                       &silence_before,
+                                       &silence_after))
+        {
+            if (AppTransparentMode_IsActive(&transparent_mode))
+            {
+                App_AtProcessTransparentChunk(&transparent_mode,
+                                              chunk,
+                                              chunk_length,
+                                              silence_before,
+                                              silence_after);
                 continue;
             }
 
-            line_buffer[line_length++] = (char)byte;
-
-            if (saw_carriage_return)
-            {
-                if (byte == '\n')
-                {
-                    line_buffer[line_length] = '\0';
-                    App_AtProcessLine(line_buffer);
-                    line_length = 0U;
-                }
-
-                saw_carriage_return = false;
-                continue;
-            }
-
-            saw_carriage_return = (byte == '\r');
+            App_AtConsumeBytes(&line_reader,
+                               &transparent_mode,
+                               chunk,
+                               chunk_length,
+                               silence_after);
         }
     }
 }

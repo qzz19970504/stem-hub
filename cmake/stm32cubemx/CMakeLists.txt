@@ -32,6 +32,9 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_protocol.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_at_command_guard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_line_reader.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_transparent_mode.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_uart_chunk_queue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_adc_filter.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_current.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_stall_guard.c
