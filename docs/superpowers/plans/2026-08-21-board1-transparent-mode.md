@@ -438,14 +438,14 @@ diagnostic sections.
 
 - [ ] **Step 2: Run all host tests**
 
-Compile and run the existing 17 native C mappings plus the four new native
+Compile and run the existing 17 native C mappings plus the three new native
 tests with `-Wall -Wextra -Werror`. Run:
 
 ```powershell
 & 'D:\Codes\STM32\stem-hub-host\env\release\Scripts\python.exe' -m pytest tests -q
 ```
 
-Expected: 21 C executables exit 0 and all Python tests pass.
+Expected: 20 C executables exit 0 and all Python tests pass.
 
 - [ ] **Step 3: Build Debug and Release cleanly**
 

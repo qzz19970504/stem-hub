@@ -58,9 +58,9 @@
 
 当前工程已经围绕以下目标搭起了应用层框架：
 
-- UART1 作为主控制串口，使用非阻塞中断接收 AT 指令。
-- UART2、UART3 可按 AT 命令独立开关；上位机可用 `AT+UARTTX=<HEX>` 精确发送二进制数据，UART2/UART3 收到的数据会以 `+UART2RX:<HEX>` / `+UART3RX:<HEX>` 异步回传。
-- 保留 v2.1 的 CRLF 行文本转发路径，用于兼容旧上位机；新上位机应优先使用 v2.2 的十六进制帧协议。
+- UART1 作为主控制串口，以 Receive-to-Idle 中断分块接收；AT 模式和透明传输模式互斥。
+- `AT+TRANS=1/2/1&2` 分别进入 UART2、UART3 或双路透明传输；满足前后至少 1 ms 静默的 `+++` 退出。
+- 透明传输期间所有普通 AT 指令都作为原始负载发送，不会被执行；UART2/UART3 的反向数据仍以 `+UART2RX:<HEX>` / `+UART3RX:<HEX>` 异步回传。
 - 使用 ADC1 和 ADC2 采样电池 NTC、电池电压、5 路器件 NTC 电压，以及电机电流检测通道。
 - 使用 FreeRTOS 任务划分 AT 解析、传感采样、电机控制、LED 控制、NMOS 控制。
 - 通过 DRV8874 的 PH/EN 模式控制电机正转、反转、制动、睡眠，并加入换向死区和可持久化的堵转电流保护。
@@ -83,7 +83,7 @@
 - MCU：STM32F103C8T6
 - 电机驱动：DRV8874，PH/EN 模式
 - 调试下载：ST-LINK 或等效 SWD 工具
-- 上位机串口工具：任意支持 115200 8N1 的串口终端
+- 上位机串口工具：任意支持 9600 8N1 的串口终端
 
 ### 软件
 
@@ -143,12 +143,12 @@ cmake --build --preset Release
 
 三个 UART 当前都配置为：
 
-- 波特率：115200
+- 波特率：9600
 - 数据位：8
 - 校验位：None
 - 停止位：1
 
-UART1 为主控制入口，UART2 和 UART3 用作可开关的下游通信口。控制命令、隧道发送和异步接收事件都复用 UART1，但保持明确的帧边界。
+UART1 为主控制入口，UART2 和 UART3 用作下游通信口。AT 模式按 CRLF 解析命令；进入透明传输后 UART1 改为原始字节转发，直到有效的 `+++` 退出。
 
 ### AT 语法约束
 
@@ -180,13 +180,9 @@ at+led=on\r\n
 
 | 指令 | 说明 |
 | --- | --- |
-| AT+UART2=ON | 打开 UART2 透传 |
-| AT+UART2=OFF | 关闭 UART2 透传 |
-| AT+UART3=ON | 打开 UART3 透传 |
-| AT+UART3=OFF | 关闭 UART3 透传 |
-| AT+UART2&3=ON | 同时打开 UART2 和 UART3 透传 |
-| AT+UART2&3=OFF | 同时关闭 UART2 和 UART3 透传 |
-| AT+UARTTX=&lt;HEX&gt; | 向当前已打开的 UART2/UART3 发送 1～32 字节原始数据 |
+| AT+TRANS=1 | 进入 UART1→UART2 透明传输 |
+| AT+TRANS=2 | 进入 UART1→UART3 透明传输 |
+| AT+TRANS=1&2 | 进入 UART1→UART2、UART3 双路透明传输 |
 | AT+LED=ON | 打开 LED 联动显示 |
 | AT+LED=OFF | 关闭 LED 联动显示 |
 | AT+MOTOR=SLEEP | 电机进入睡眠 |
@@ -248,28 +244,26 @@ ERROR:FLASH_WRITE
 - `n=60` 表示连续开启。调度器仍在内部经过 60 秒周期边界以接收待生效配置，但边界处不切换 LM51770 EN，避免重复软启动。
 - `AT+CHARGE=ON` 的成功回包表示循环请求已接受；上位机 CHARGE 开关表示循环已启用，不表示 LM51770 EN 此刻必然处于 ON 相位。
 
-### v2.2 双向 UART 隧道
+### 互斥透明传输
 
-推荐的新协议如下：
-
-- 先用 `AT+UART2=ON`、`AT+UART3=ON` 或 `AT+UART2&3=ON` 选择目标。
-- 上位机发送 `AT+UARTTX=<HEX>\r\n`；`<HEX>` 必须是 2～64 个大写十六进制字符，对应 1～32 字节原始数据。
-- 如果两个目标都打开，同一份原始数据会发送到 UART2 和 UART3；全部目标发送成功后才返回 `OK`。
-- UART2/UART3 收到的数据由中断写入独立环形缓冲，再由 `bridgeTask` 在任务上下文按最多 32 字节封装为 `+UART2RX:<HEX>\r\n` 或 `+UART3RX:<HEX>\r\n`。
-- `+UART2RX` / `+UART3RX` 是异步事件，不带额外 `OK`，上位机不得把它们当作当前 AT 请求的响应终止行。
-- 关闭某一路桥接时，固件会清空该路尚未回传的接收缓冲，避免重新打开后混入旧数据。
+- 在 AT 模式发送 `AT+TRANS=1\r\n`、`AT+TRANS=2\r\n` 或 `AT+TRANS=1&2\r\n`，收到 `OK` 后进入对应目标的透明传输。
+- 透明传输中，UART1 的普通字节原样送往选定目标；类似 `AT+MOTOR=FWD\r\n` 的数据也只是负载，不会执行。
+- 退出序列为 `+++`，其前后都必须有至少 1 ms 无数据。有效退出序列不会送往下游，退出后 UART1 返回 `OK` 并恢复 AT 模式。
+- 不满足静默条件的 `+++`、`abc+++def`、`++++` 等内容全部补发，不丢字节。
+- UART2/UART3 收到的数据仍由 `bridgeTask` 封装为 `+UART2RX:<HEX>\r\n` / `+UART3RX:<HEX>\r\n`；这些是异步事件，不带额外 `OK`。
+- 手动电机、电源或参数 AT 操作必须先退出透明传输；独立运行的过温、堵转等安全保护任务不会停止。
+- 旧 `AT+UART2/UART3/UART2&3=ON/OFF`（包括 `AT+UART23` 别名）已删除。`AT+UARTTX=<HEX>` 仅为解析兼容保留，在 AT 模式没有活动目标时返回 `ERROR:UART_DISABLED`。
 
 示例：
 
 ```text
-AT+UART2=ON\r\n
+AT+TRANS=1\r\n
 OK\r\n
-AT+UARTTX=00FF0D0A\r\n
-OK\r\n
+<原始字节 00 FF 0D 0A>
 +UART2RX:414243\r\n
+[静默至少 1 ms]+++[静默至少 1 ms]
+OK\r\n
 ```
-
-兼容行为：v2.1 的 UART1 非 AT、CRLF 行文本仍可单向转发到已启用的 UART2/UART3，但它依赖行结束符和字符串长度，不适合包含 `0x00` 的二进制数据，也不提供原始反向通道。
 
 ### 上位机握手
 
@@ -485,17 +479,17 @@ stem-hub/
 
 常见原因：
 
-- 对应桥接没有打开；此时 `AT+UARTTX` 返回 `ERROR:UART_DISABLED`
-- `<HEX>` 为空、长度为奇数、含小写或非十六进制字符；此时返回 `ERROR:HEX`
-- 单帧超过 32 字节；上位机应拆分后逐帧等待 `OK`
+- `AT+TRANS` 选择了错误的目标：`1` 是 UART2，`2` 是 UART3，`1&2` 是双路
+- 仍按旧协议发送 `AT+UARTTX`；互斥设计下应在收到 `AT+TRANS` 的 `OK` 后直接发送原始字节
+- `+++` 前后没有各留至少 1 ms 静默，因此被当作普通负载完整转发
 - UART2/UART3 实际发送失败；此时返回 `ERROR:UART_TX`
 - UART2/UART3 串口线连接错误
 
 优先确认：
 
 ```text
-AT+UART2=ON
-AT+UARTTX=414243
+AT+TRANS=1
+<原始 ASCII ABC>
 ```
 
 ### 5. 电机不转或上电即异常
