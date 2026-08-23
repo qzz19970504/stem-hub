@@ -23,6 +23,8 @@ void App_StateSetLedMasterEnabled(bool enabled);
 bool App_StateTryGetLedAndMotor(bool *led_master_enabled, AppMotorMode *motor_mode);
 
 void App_StateSetOutputEnabled(AppOutputTarget target, bool enabled);
+void App_StateSetMotorBypassEnabled(bool enabled);
+bool App_StateTryGetIoStatus(AppIoStatus *status);
 
 bool App_StateSetChargeOnTimeSeconds(uint32_t seconds);
 bool App_StateTryGetChargeOnTimeSeconds(uint32_t *seconds);

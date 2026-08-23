@@ -119,14 +119,20 @@ const char *App_MotorModeToString(AppMotorMode mode)
 
 bool App_MotorEnqueueMode(AppMotorMode mode)
 {
-    AppMotorRequest request = {.mode = mode};
+    AppMotorRequest request = {
+        .type = APP_MOTOR_REQUEST_SET_MODE,
+        .data.mode = mode,
+    };
 
     return osMessageQueuePut(g_app_runtime.motor_queue, &request, 0U, 0U) == osOK;
 }
 
 bool App_MotorEnqueueThermalSleep(void)
 {
-    AppMotorRequest request = {.mode = APP_MOTOR_MODE_SLEEP};
+    AppMotorRequest request = {
+        .type = APP_MOTOR_REQUEST_SET_MODE,
+        .data.mode = APP_MOTOR_MODE_SLEEP,
+    };
 
     return osMessageQueuePut(g_app_runtime.motor_queue,
                              &request,
@@ -159,11 +165,11 @@ void App_MotorTask(void *argument)
                 App_StateTryGetThermalProtectionActive(&thermal_active);
             if (App_TaskSafetyAllowsMotor(state_available,
                                           thermal_active,
-                                          request.mode))
+                                          request.data.mode))
             {
-                App_MotorApplyMode(request.mode);
-                if ((request.mode == APP_MOTOR_MODE_FORWARD)
-                    || (request.mode == APP_MOTOR_MODE_REVERSE))
+                App_MotorApplyMode(request.data.mode);
+                if ((request.data.mode == APP_MOTOR_MODE_FORWARD)
+                    || (request.data.mode == APP_MOTOR_MODE_REVERSE))
                 {
                     App_MotorStallGuardStart(&stall_guard, HAL_GetTick());
                 }

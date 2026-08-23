@@ -46,11 +46,24 @@ typedef struct
     bool nmos2_enabled;
     bool uvlo_enabled;
     bool mp4317_enabled;
+    bool motor_bypass_enabled;
+    bool charge_bypass_enabled;
 } AppIoStatus;
+
+typedef enum
+{
+    APP_MOTOR_REQUEST_SET_MODE = 0,
+    APP_MOTOR_REQUEST_SET_BYPASS
+} AppMotorRequestType;
 
 typedef struct
 {
-    AppMotorMode mode;
+    AppMotorRequestType type;
+    union
+    {
+        AppMotorMode mode;
+        bool bypass_enabled;
+    } data;
 } AppMotorRequest;
 
 typedef struct
@@ -63,14 +76,16 @@ typedef enum
     APP_OUTPUT_TARGET_NMOS1 = 0,
     APP_OUTPUT_TARGET_NMOS2,
     APP_OUTPUT_TARGET_UVLO,
-    APP_OUTPUT_TARGET_MP4317
+    APP_OUTPUT_TARGET_MP4317,
+    APP_OUTPUT_TARGET_CHARGE_BYPASS
 } AppOutputTarget;
 
 typedef enum
 {
     APP_OUTPUT_REQUEST_SET_TARGET = 0,
     APP_OUTPUT_REQUEST_SET_POWER_MODE,
-    APP_OUTPUT_REQUEST_THERMAL_STOP
+    APP_OUTPUT_REQUEST_THERMAL_STOP,
+    APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS
 } AppOutputRequestType;
 
 typedef struct
@@ -84,6 +99,7 @@ typedef struct
             bool enabled;
         } target;
         AppPowerMode power_mode;
+        bool charge_bypass_enabled;
     } data;
 } AppOutputRequest;
 
