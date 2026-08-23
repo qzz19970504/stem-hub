@@ -29,7 +29,7 @@ def read_response(port: Any, timeout_seconds: float) -> bytes:
         chunk = port.read(port.in_waiting or 1)
         if chunk:
             response.extend(chunk)
-            lines = bytes(response).splitlines()
+            lines = bytes(response).split(b"\r\n")[:-1]
             if any(line == b"OK" or line.startswith(b"ERROR:") for line in lines):
                 return bytes(response)
         else:
@@ -53,7 +53,7 @@ def send_command(
     print(f"{command}: {printable}")
 
     token = expected_token.encode("ascii")
-    lines = response.splitlines()
+    lines = response.split(b"\r\n")[:-1]
     terminal = next(
         (line for line in lines if line == b"OK" or line.startswith(b"ERROR:")),
         None,

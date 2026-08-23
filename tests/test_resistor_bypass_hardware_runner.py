@@ -42,6 +42,12 @@ class FakeSerial:
         return chunk
 
 
+class ChunkedFakeSerial(FakeSerial):
+    @property
+    def in_waiting(self) -> int:
+        return min(len(self.pending), 7)
+
+
 def test_send_command_frames_crlf_and_checks_terminal_token() -> None:
     runner = load_runner()
     port = FakeSerial({b"AT+MOTOR_BYPASS=OFF\r\n": b"OK\r\n"})
@@ -50,6 +56,21 @@ def test_send_command_frames_crlf_and_checks_terminal_token() -> None:
 
     assert response == b"OK\r\n"
     assert port.writes == [b"AT+MOTOR_BYPASS=OFF\r\n"]
+
+
+def test_error_response_is_not_accepted_until_its_crlf_is_complete() -> None:
+    runner = load_runner()
+    port = ChunkedFakeSerial(
+        {b"AT+MOTOR_BYPASS=ON\r\n": b"ERROR:STATE\r\n"}
+    )
+
+    response = runner.send_command(
+        port,
+        "AT+MOTOR_BYPASS=ON",
+        "ERROR:STATE",
+    )
+
+    assert response == b"ERROR:STATE\r\n"
 
 
 def test_default_sequence_only_checks_handshake_and_inactive_interlocks() -> None:
