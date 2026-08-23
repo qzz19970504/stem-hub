@@ -27,6 +27,8 @@ static AppState g_app_state = {
         .nmos2_enabled = false,
         .uvlo_enabled = false,
         .mp4317_enabled = false,
+        .motor_bypass_enabled = false,
+        .charge_bypass_enabled = false,
     },
     .charge_on_time_seconds = APP_CHARGE_DEFAULT_ON_TIME_SECONDS,
     .stall_current_ma = APP_MOTOR_STALL_DEFAULT_CURRENT_MA,
@@ -197,11 +199,40 @@ void App_StateSetOutputEnabled(AppOutputTarget target, bool enabled)
     case APP_OUTPUT_TARGET_MP4317:
         g_app_state.io_status.mp4317_enabled = enabled;
         break;
+    case APP_OUTPUT_TARGET_CHARGE_BYPASS:
+        g_app_state.io_status.charge_bypass_enabled = enabled;
+        break;
     default:
         break;
     }
 
     (void)osMutexRelease(g_app_runtime.state_mutex);
+}
+
+void App_StateSetMotorBypassEnabled(bool enabled)
+{
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) == osOK)
+    {
+        g_app_state.io_status.motor_bypass_enabled = enabled;
+        (void)osMutexRelease(g_app_runtime.state_mutex);
+    }
+}
+
+bool App_StateTryGetIoStatus(AppIoStatus *status)
+{
+    if (status == NULL)
+    {
+        return false;
+    }
+
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) != osOK)
+    {
+        return false;
+    }
+
+    *status = g_app_state.io_status;
+    (void)osMutexRelease(g_app_runtime.state_mutex);
+    return true;
 }
 
 bool App_StateSetChargeOnTimeSeconds(uint32_t seconds)

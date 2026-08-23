@@ -56,6 +56,47 @@ uint32_t osSemaphoreGetCount(osSemaphoreId_t semaphore_id)
     return 0U;
 }
 
+static void TestResistorBypassesDefaultDisabled(void)
+{
+    AppIoStatus io_status = {0};
+
+    assert(App_StateTryGetIoStatus(&io_status));
+    assert(!io_status.motor_bypass_enabled);
+    assert(!io_status.charge_bypass_enabled);
+}
+
+static void TestResistorBypassAppliedStateCanChange(void)
+{
+    AppIoStatus io_status = {0};
+
+    App_StateSetMotorBypassEnabled(true);
+    App_StateSetOutputEnabled(APP_OUTPUT_TARGET_CHARGE_BYPASS, true);
+
+    assert(App_StateTryGetIoStatus(&io_status));
+    assert(io_status.motor_bypass_enabled);
+    assert(io_status.charge_bypass_enabled);
+
+    App_StateSetMotorBypassEnabled(false);
+    App_StateSetOutputEnabled(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);
+}
+
+static void TestOwnerRequestsCarryBypassState(void)
+{
+    AppMotorRequest motor_request = {
+        .type = APP_MOTOR_REQUEST_SET_BYPASS,
+        .data.bypass_enabled = true,
+    };
+    AppOutputRequest output_request = {
+        .type = APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS,
+        .data.charge_bypass_enabled = true,
+    };
+
+    assert(motor_request.type == APP_MOTOR_REQUEST_SET_BYPASS);
+    assert(motor_request.data.bypass_enabled);
+    assert(output_request.type == APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS);
+    assert(output_request.data.charge_bypass_enabled);
+}
+
 static void TestChargeTimeDefaultsToTenSeconds(void)
 {
     uint32_t seconds = 0U;
@@ -138,6 +179,7 @@ static void TestStallCurrentRejectsOutOfRangeWithoutChangingState(void)
 
 static void TestTryGetReportsInvalidOutputAndBusyState(void)
 {
+    AppIoStatus io_status = {0};
     uint32_t seconds = 0U;
     uint32_t current_ma = 0U;
     bool is_active = false;
@@ -145,11 +187,13 @@ static void TestTryGetReportsInvalidOutputAndBusyState(void)
     assert(!App_StateTryGetChargeOnTimeSeconds(NULL));
     assert(!App_StateTryGetStallCurrentMa(NULL));
     assert(!App_StateTryGetThermalProtectionActive(NULL));
+    assert(!App_StateTryGetIoStatus(NULL));
 
     state_mutex_available = false;
     assert(!App_StateTryGetChargeOnTimeSeconds(&seconds));
     assert(!App_StateTryGetStallCurrentMa(&current_ma));
     assert(!App_StateTryGetThermalProtectionActive(&is_active));
+    assert(!App_StateTryGetIoStatus(&io_status));
     assert(!App_StateSetChargeOnTimeSeconds(APP_CHARGE_DEFAULT_ON_TIME_SECONDS));
     assert(!App_StateSetStallCurrentMa(APP_MOTOR_STALL_DEFAULT_CURRENT_MA));
     assert(!App_StateSetThermalProtectionActive(true));
@@ -169,6 +213,9 @@ static void TestMissingStateMutexFailsSafely(void)
 
 int main(void)
 {
+    TestResistorBypassesDefaultDisabled();
+    TestResistorBypassAppliedStateCanChange();
+    TestOwnerRequestsCarryBypassState();
     TestChargeTimeDefaultsToTenSeconds();
     TestChargeTimeAcceptsConfiguredRange();
     TestChargeTimeRejectsOutOfRangeWithoutChangingState();

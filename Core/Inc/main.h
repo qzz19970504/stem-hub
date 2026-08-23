@@ -57,6 +57,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define MOTOR_BYPASS_Pin GPIO_PIN_13
+#define MOTOR_BYPASS_GPIO_Port GPIOC
+#define CHARGE_BYPASS_Pin GPIO_PIN_14
+#define CHARGE_BYPASS_GPIO_Port GPIOC
 #define LED1_Pin GPIO_PIN_15
 #define LED1_GPIO_Port GPIOC
 #define EN_IN1_Pin GPIO_PIN_12

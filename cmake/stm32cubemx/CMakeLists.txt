@@ -35,6 +35,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_adc_filter.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_current.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_stall_guard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_resistor_bypass.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config_flash.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_stall_config_service.c

@@ -14,6 +14,7 @@
 #include "app_led.h"
 #include "app_motor.h"
 #include "app_output.h"
+#include "app_resistor_bypass.h"
 #include "app_runtime.h"
 #include "app_state.h"
 #include "app_stall_config_service.h"
@@ -348,6 +349,53 @@ static void App_AtReplyStallCurrent(void)
     App_RuntimeSendText(&huart1, buffer);
 }
 
+static void App_AtHandleMotorBypass(bool enabled)
+{
+    AppMotorStatus status;
+
+    if (enabled)
+    {
+        if (!App_MotorTryGetStatus(&status))
+        {
+            App_RuntimeSendError("STATE_BUSY");
+            return;
+        }
+
+        if (!App_ResistorBypassMotorActivationAllowed(status.mode))
+        {
+            App_RuntimeSendError("STATE");
+            return;
+        }
+    }
+
+    App_MotorEnqueueBypass(enabled)
+        ? App_RuntimeSendOk()
+        : App_RuntimeSendError("MOTOR_QUEUE");
+}
+
+static void App_AtHandleChargeBypass(bool enabled)
+{
+    AppIoStatus status;
+
+    if (enabled)
+    {
+        if (!App_StateTryGetIoStatus(&status))
+        {
+            App_RuntimeSendError("STATE_BUSY");
+            return;
+        }
+        if (!App_ResistorBypassChargeActivationAllowed(status.uvlo_enabled))
+        {
+            App_RuntimeSendError("STATE");
+            return;
+        }
+    }
+
+    App_OutputEnqueueChargeBypass(enabled)
+        ? App_RuntimeSendOk()
+        : App_RuntimeSendError("OUTPUT_QUEUE");
+}
+
 static void App_AtHandleCommand(const AppAtCommand *command)
 {
     bool queued = false;
@@ -407,6 +455,12 @@ static void App_AtHandleCommand(const AppAtCommand *command)
     case APP_AT_COMMAND_SET_MOTOR_MODE:
         queued = App_MotorEnqueueMode(command->data.motor.mode);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("MOTOR_QUEUE");
+        break;
+    case APP_AT_COMMAND_SET_MOTOR_BYPASS:
+        App_AtHandleMotorBypass(command->data.output.enabled);
+        break;
+    case APP_AT_COMMAND_SET_CHARGE_BYPASS:
+        App_AtHandleChargeBypass(command->data.output.enabled);
         break;
     case APP_AT_COMMAND_SET_NMOS1:
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS1, command->data.output.enabled);

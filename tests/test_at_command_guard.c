@@ -35,6 +35,12 @@ static void TestThermalProtectionBlocksUnsafeStarts(void)
     AppAtCommand nmos2_on = MakeOutputCommand(APP_AT_COMMAND_SET_NMOS2, true);
     AppAtCommand motor_wake = MakeMotorCommand(APP_MOTOR_MODE_WAKE);
     AppAtCommand motor_stop = MakeMotorCommand(APP_MOTOR_MODE_STOP);
+    AppAtCommand motor_bypass_on = MakeOutputCommand(
+        APP_AT_COMMAND_SET_MOTOR_BYPASS,
+        true);
+    AppAtCommand charge_bypass_on = MakeOutputCommand(
+        APP_AT_COMMAND_SET_CHARGE_BYPASS,
+        true);
 
     assert(App_AtCommandGuardEvaluate(&charge, true, true)
            == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE);
@@ -48,6 +54,10 @@ static void TestThermalProtectionBlocksUnsafeStarts(void)
            == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE);
     assert(App_AtCommandGuardEvaluate(&motor_stop, true, true)
            == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE);
+    assert(App_AtCommandGuardEvaluate(&motor_bypass_on, true, true)
+           == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE);
+    assert(App_AtCommandGuardEvaluate(&charge_bypass_on, true, true)
+           == APP_AT_COMMAND_GUARD_OVER_TEMPERATURE);
 }
 
 static void TestThermalProtectionAllowsSafeCommands(void)
@@ -56,6 +66,12 @@ static void TestThermalProtectionAllowsSafeCommands(void)
     AppAtCommand nmos1_off = MakeOutputCommand(APP_AT_COMMAND_SET_NMOS1, false);
     AppAtCommand nmos2_off = MakeOutputCommand(APP_AT_COMMAND_SET_NMOS2, false);
     AppAtCommand motor_sleep = MakeMotorCommand(APP_MOTOR_MODE_SLEEP);
+    AppAtCommand motor_bypass_off = MakeOutputCommand(
+        APP_AT_COMMAND_SET_MOTOR_BYPASS,
+        false);
+    AppAtCommand charge_bypass_off = MakeOutputCommand(
+        APP_AT_COMMAND_SET_CHARGE_BYPASS,
+        false);
     AppAtCommand charge_time = { .type = APP_AT_COMMAND_SET_CHARGE_TIME };
     AppAtCommand query = { .type = APP_AT_COMMAND_QUERY_CHARGE_TIME };
     AppAtCommand stall_current = {
@@ -73,6 +89,10 @@ static void TestThermalProtectionAllowsSafeCommands(void)
            == APP_AT_COMMAND_GUARD_ALLOW);
     assert(App_AtCommandGuardEvaluate(&motor_sleep, true, true)
            == APP_AT_COMMAND_GUARD_ALLOW);
+    assert(App_AtCommandGuardEvaluate(&motor_bypass_off, true, true)
+           == APP_AT_COMMAND_GUARD_ALLOW);
+    assert(App_AtCommandGuardEvaluate(&charge_bypass_off, true, true)
+           == APP_AT_COMMAND_GUARD_ALLOW);
     assert(App_AtCommandGuardEvaluate(&charge_time, false, true)
            == APP_AT_COMMAND_GUARD_ALLOW);
     assert(App_AtCommandGuardEvaluate(&query, false, true)
@@ -87,10 +107,20 @@ static void TestUnsafeStartNeedsReadableThermalState(void)
 {
     AppAtCommand charge = MakePowerCommand(APP_POWER_MODE_CHARGE);
     AppAtCommand motor_wake = MakeMotorCommand(APP_MOTOR_MODE_WAKE);
+    AppAtCommand motor_bypass_on = MakeOutputCommand(
+        APP_AT_COMMAND_SET_MOTOR_BYPASS,
+        true);
+    AppAtCommand charge_bypass_on = MakeOutputCommand(
+        APP_AT_COMMAND_SET_CHARGE_BYPASS,
+        true);
 
     assert(App_AtCommandGuardEvaluate(&charge, false, false)
            == APP_AT_COMMAND_GUARD_STATE_BUSY);
     assert(App_AtCommandGuardEvaluate(&motor_wake, false, false)
+           == APP_AT_COMMAND_GUARD_STATE_BUSY);
+    assert(App_AtCommandGuardEvaluate(&motor_bypass_on, false, false)
+           == APP_AT_COMMAND_GUARD_STATE_BUSY);
+    assert(App_AtCommandGuardEvaluate(&charge_bypass_on, false, false)
            == APP_AT_COMMAND_GUARD_STATE_BUSY);
     assert(App_AtCommandGuardEvaluate(&charge, true, false)
            == APP_AT_COMMAND_GUARD_ALLOW);

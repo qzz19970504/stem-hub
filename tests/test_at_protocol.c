@@ -34,6 +34,17 @@ static void expect_power_command(const char *line, AppPowerMode expected_mode)
     assert(command.data.power.mode == expected_mode);
 }
 
+static void expect_boolean_command(const char *line,
+                                   AppAtCommandType expected_type,
+                                   bool expected_enabled)
+{
+    AppAtCommand command = {0};
+
+    assert(AppAtProtocol_Parse(line, &command));
+    assert(command.type == expected_type);
+    assert(command.data.output.enabled == expected_enabled);
+}
+
 static void expect_charge_time_command(const char *line, uint32_t expected_seconds)
 {
     AppAtCommand command = {0};
@@ -110,6 +121,19 @@ int main(void)
     assert(command.type == APP_AT_COMMAND_SET_MOTOR_MODE);
     assert(command.data.motor.mode == APP_MOTOR_MODE_REVERSE);
 
+    expect_boolean_command("AT+MOTOR_BYPASS=ON\r\n",
+                           APP_AT_COMMAND_SET_MOTOR_BYPASS,
+                           true);
+    expect_boolean_command("AT+MOTOR_BYPASS=OFF\r\n",
+                           APP_AT_COMMAND_SET_MOTOR_BYPASS,
+                           false);
+    expect_boolean_command("AT+CHARGE_BYPASS=ON\r\n",
+                           APP_AT_COMMAND_SET_CHARGE_BYPASS,
+                           true);
+    expect_boolean_command("AT+CHARGE_BYPASS=OFF\r\n",
+                           APP_AT_COMMAND_SET_CHARGE_BYPASS,
+                           false);
+
     assert(AppAtProtocol_Parse("AT+NMOS1=ON\r\n", &command));
     assert(command.type == APP_AT_COMMAND_SET_NMOS1);
     assert(command.data.output.enabled == true);
@@ -158,6 +182,11 @@ int main(void)
     assert(!AppAtProtocol_Parse("AT+MP4317=ON\r\n", &command));
     assert(!AppAtProtocol_Parse("AT+MP4317=OFF\r\n", &command));
     assert(!AppAtProtocol_Parse("AT+POWER=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MOTOR_BYPASS=HIGH\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MOTOR_BYPASS=\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+MOTOR_BYPASS=ON \r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+charge_bypass=ON\r\n", &command));
+    assert(!AppAtProtocol_Parse("AT+CHARGE_BYPASS=PRECHARGE\r\n", &command));
 
     expect_query_command("AT+SENSE?\r\n", APP_AT_COMMAND_QUERY_SENSE);
     expect_query_command("AT+FAULT?\r\n", APP_AT_COMMAND_QUERY_FAULT);

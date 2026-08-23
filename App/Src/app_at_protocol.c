@@ -384,6 +384,22 @@ bool AppAtProtocol_Parse(const char *line, AppAtCommand *out_command)
         return true;
     }
 
+    if (AppAtProtocol_MatchAssignment("AT+MOTOR_BYPASS=", command_body, &value)
+        && AppAtProtocol_ParseOnOff(value, &enabled))
+    {
+        out_command->type = APP_AT_COMMAND_SET_MOTOR_BYPASS;
+        out_command->data.output.enabled = enabled;
+        return true;
+    }
+
+    if (AppAtProtocol_MatchAssignment("AT+CHARGE_BYPASS=", command_body, &value)
+        && AppAtProtocol_ParseOnOff(value, &enabled))
+    {
+        out_command->type = APP_AT_COMMAND_SET_CHARGE_BYPASS;
+        out_command->data.output.enabled = enabled;
+        return true;
+    }
+
     if (AppAtProtocol_MatchAssignment("AT+NMOS1=", command_body, &value)
         && AppAtProtocol_ParseOnOff(value, &enabled))
     {
