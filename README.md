@@ -83,7 +83,7 @@
 - MCU：STM32F103C8T6
 - 电机驱动：DRV8874，PH/EN 模式
 - 调试下载：ST-LINK 或等效 SWD 工具
-- 上位机串口工具：任意支持 115200 8N1 的串口终端
+- 上位机串口工具：任意支持 9600 8N1 的串口终端
 
 ### 软件
 
@@ -143,7 +143,7 @@ cmake --build --preset Release
 
 三个 UART 当前都配置为：
 
-- 波特率：115200
+- 波特率：9600
 - 数据位：8
 - 校验位：None
 - 停止位：1
@@ -195,12 +195,16 @@ at+led=on\r\n
 | AT+MOTOR=REV | 电机反转 |
 | AT+MOTOR=BRAKE | 电机制动 |
 | AT+MOTOR=STOP | 电机停止，当前实现等同制动 |
+| AT+MOTOR_BYPASS=ON | 仅在 FWD/REV 已启动后拉高 PC13，短接电机启动限流电阻 |
+| AT+MOTOR_BYPASS=OFF | 拉低 PC13，恢复电机启动限流电阻 |
 | AT+NMOS1=ON | 打开 NMOS1 |
 | AT+NMOS1=OFF | 关闭 NMOS1 |
 | AT+NMOS2=ON | 打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
 | AT+CHARGE=ON | 启动 LM51770 的 60 秒间歇充电循环；默认 10 秒开 / 50 秒关 |
 | AT+CHARGE=OFF | 同时关闭 LM51770 与 MP4317 |
+| AT+CHARGE_BYPASS=ON | 仅在 LM51770 实际 ON 相位拉高 PC14，短接充电限流电阻 |
+| AT+CHARGE_BYPASS=OFF | 拉低 PC14，恢复充电限流电阻 |
 | AT+DRIVE=ON | 先关闭 LM51770 与 MP4317，再仅打开 MP4317 |
 | AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
 | AT+POWER=OFF | 同时关闭 LM51770 与 MP4317 |
@@ -233,12 +237,19 @@ ERROR:PARSE
 ERROR:SENSE_NOT_READY
 ERROR:LINE_TOO_LONG
 ERROR:STATE_BUSY
+ERROR:STATE
 ERROR:OVER_TEMPERATURE
 ERROR:MOTOR_RUNNING
 ERROR:FLASH_WRITE
 ```
 
-`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。`ERROR:MOTOR_RUNNING` 表示 FWD/REV 运行期间拒绝写堵转阈值，`ERROR:FLASH_WRITE` 表示非易失写入或写后校验失败。
+`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE` 表示旁路 ON 的运行条件不成立，例如电机未处于 FWD/REV，或充电当前不在实际 ON 相位。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。`ERROR:MOTOR_RUNNING` 表示 FWD/REV 运行期间拒绝写堵转阈值，`ERROR:FLASH_WRITE` 表示非易失写入或写后校验失败。
+
+### 限流电阻旁路语义
+
+- PC13（STM32F103C8T6 物理 2 脚）为推挽输出，默认低。电机先以限流电阻启动；只有状态已是 FWD/REV 时 `AT+MOTOR_BYPASS=ON` 才能拉高 PC13。STOP、BRAKE、SLEEP、堵转、过温或 FWD/REV 换向都会先恢复低电平；换向完成后必须再次发送 ON。
+- PC14（物理 3 脚）为推挽输出，默认低。只有 LM51770 处于充电周期的实际 ON 相位时 `AT+CHARGE_BYPASS=ON` 才能拉高 PC14。进入周期 OFF 相位、退出 CHARGE、切到 DRIVE、过温或任何电源路径阶段切换都会先恢复低电平；下一个 ON 相位不会自动旁路。
+- 两条 OFF 指令始终是安全关闭请求。普通 AT 指令和 UART2/UART3 通信在电机运行时仍可使用；旁路功能不是独占通信模式。
 
 ### 充电时间语义
 

@@ -112,3 +112,11 @@ PA11--nFLT
 4. FWD/REV 运行时禁止擦写阈值并返回 `ERROR:MOTOR_RUNNING`；Flash 擦写或写后校验失败返回 `ERROR:FLASH_WRITE`。相同值不重复擦写。
 5. 堵转后正反两个方向都允许再次启动；新 FWD/REV 会清除旧锁存并重新开始 300 ms 屏蔽。若仍沿堵塞方向运行，随后会再次触发停机。SLEEP、WAKE、BRAKE、STOP 不清除旧锁存；过温保护仍具有更高优先级。
 6. 该电流闭环是软件保护，不能替代 DRV8874 硬件保护、保险和机械限位。测试应降低阈值或使用可控负载，不故意制造 19 A 硬堵转。
+
+## PC13/PC14 限流电阻旁路增量说明（2026-08-23）
+
+1. UART1、UART2、UART3 均使用 9600 8N1；电机运行时普通 AT 解析及 UART2/UART3 通信继续工作，不使用独占透传模式。
+2. PC13（STM32F103C8T6 物理 2 脚）配置为推挽输出且默认低电平，低电平保留电机启动限流电阻。电机进入 FWD/REV 后可发送 `AT+MOTOR_BYPASS=ON` 拉高并短接电阻；`AT+MOTOR_BYPASS=OFF` 恢复低电平。
+3. PC13 的 ON 只在 FWD/REV 状态接受，否则返回 `ERROR:STATE`；状态暂不可读返回 `ERROR:STATE_BUSY`。STOP、BRAKE、SLEEP、堵转、过温及 FWD/REV 换向均自动拉低，换向后必须重新 ON。
+4. PC14（物理 3 脚）配置为推挽输出且默认低电平，低电平为水泥电阻参与限流的预充电。只有 LM51770 处于充电循环的实际 ON 相位时，`AT+CHARGE_BYPASS=ON` 才拉高 PC14 进入全功率；`AT+CHARGE_BYPASS=OFF` 恢复预充电。
+5. PC14 在周期 OFF、退出 CHARGE、切换 DRIVE、过温或任何电源阶段切换时自动拉低；每个新的 ON 相位都从低电平开始，不自动恢复旁路。两条 OFF 指令始终允许作为安全关闭请求。

@@ -17,8 +17,10 @@
 - UART2/UART3 接收数据通过异步十六进制事件回传
 - LED 总开关控制
 - 电机模式控制与状态查询
+- 电机启动限流电阻旁路（PC13）
 - NMOS1、NMOS2 控制
 - MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
+- 充电限流电阻旁路（PC14）
 - 60 秒周期内的充电开启时间设置与查询
 - MCU、LM51770、MP4317、DRV8874 与 LM51770 充电 MOS 五路器件温度的软件过温停机
 - 传感采样结果查询
@@ -39,7 +41,7 @@ UART1、UART2、UART3 当前都使用相同配置：
 
 | 参数 | 值 |
 | --- | --- |
-| 波特率 | 115200 |
+| 波特率 | 9600 |
 | 数据位 | 8 |
 | 校验位 | None |
 | 停止位 | 1 |
@@ -146,6 +148,7 @@ ERROR
 ERROR:PARSE
 ERROR:SENSE_NOT_READY
 ERROR:LINE_TOO_LONG
+ERROR:STATE
 ERROR:STATE_BUSY
 ERROR:OVER_TEMPERATURE
 ERROR:LED_QUEUE
@@ -164,11 +167,12 @@ ERROR:UNSUPPORTED
 - ERROR:PARSE：格式合法但内容不匹配当前支持的命令集
 - ERROR:SENSE_NOT_READY：传感任务尚未完成第一次有效采样
 - ERROR:LINE_TOO_LONG：一行数据超出内部缓存限制
+- ERROR:STATE：旁路 ON 的前置运行状态不成立；电机须已是 FWD/REV，充电须处于实际 ON 相位
 - ERROR:STATE_BUSY：共享保护状态或 RAM 配置的互斥资源暂不可用；危险开启命令在保护状态未知时不会放行
 - ERROR:OVER_TEMPERATURE：NTC 过温保护已锁存，当前命令试图开启充电、驱动、NMOS1/2 或非 SLEEP 电机模式
 - ERROR:LED_QUEUE：LED 控制消息入队失败
 - ERROR:MOTOR_QUEUE：电机控制消息入队失败
-- ERROR:OUTPUT_QUEUE：NMOS 或完整电源模式控制消息入队失败
+- ERROR:OUTPUT_QUEUE：NMOS、充电电阻旁路或完整电源模式控制消息入队失败
 - ERROR:PARSE：命令帧属于 AT 格式但不匹配当前命令集；旧的独立 LM51770/MP4317 指令也返回此错误
 - ERROR:HEX：`AT+UARTTX` 的十六进制负载为空、长度非法、含非法字符或超过 32 字节
 - ERROR:UART_DISABLED：UART2 和 UART3 均未打开，无法执行 `AT+UARTTX`
@@ -198,12 +202,16 @@ ERROR:UNSUPPORTED
 | 电机 | AT+MOTOR=REV\r\n | 电机反转 | OK |
 | 电机 | AT+MOTOR=BRAKE\r\n | 电机制动 | OK |
 | 电机 | AT+MOTOR=STOP\r\n | 电机停止，当前实现等同制动 | OK |
+| 电机限流 | AT+MOTOR_BYPASS=ON\r\n | 仅在 FWD/REV 已启动后拉高 PC13，短接启动限流电阻 | OK |
+| 电机限流 | AT+MOTOR_BYPASS=OFF\r\n | 拉低 PC13，恢复启动限流电阻 | OK |
 | NMOS | AT+NMOS1=ON\r\n | 打开 NMOS1 | OK |
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
 | 电源路径 | AT+CHARGE=ON\r\n | 启动 60 秒周期的 LM51770 充电循环；默认 10 秒开 / 50 秒关 | OK |
 | 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
+| 充电限流 | AT+CHARGE_BYPASS=ON\r\n | 仅在 LM51770 实际 ON 相位拉高 PC14，短接充电限流电阻 | OK |
+| 充电限流 | AT+CHARGE_BYPASS=OFF\r\n | 拉低 PC14，恢复充电限流电阻 | OK |
 | 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
 | 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
 | 电源路径 | AT+POWER=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
@@ -427,6 +435,18 @@ AT+MOTOR=STOP
 
 当前版本中 STOP 与 BRAKE 的行为一致，都会让 EN 关闭并保持驱动唤醒。
 
+#### 5.3.6 电机启动限流电阻旁路
+
+```text
+AT+MOTOR_BYPASS=ON
+AT+MOTOR_BYPASS=OFF
+```
+
+- PC13（STM32F103C8T6 物理 2 脚）为推挽输出，复位默认低电平，限流电阻接入。
+- 必须先让电机进入 FWD 或 REV，随后 ON 才返回 `OK` 并拉高 PC13；其他状态下 ON 返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
+- STOP、BRAKE、SLEEP、堵转、过温和 FWD/REV 换向均自动拉低 PC13。换向后的新方向必须重新发送 ON，不能沿用换向前的旁路状态。
+- OFF 始终可请求恢复低电平。电机运行期间 UART1 的其他 AT 指令与 UART2/UART3 通信仍正常工作。
+
 ### 5.4 NMOS 与互锁电源路径命令
 
 #### 5.4.1 NMOS1 和 NMOS2
@@ -465,7 +485,19 @@ AT+POWER=OFF
 - MCU 复位后保持两路全关，不自动恢复充电循环。
 - 旧的 `AT+LM51770=ON/OFF` 与 `AT+MP4317=ON/OFF` 已删除，不能绕过 MCU 互锁。
 
-#### 5.4.3 充电时间设置与查询
+#### 5.4.3 充电限流电阻旁路
+
+```text
+AT+CHARGE_BYPASS=ON
+AT+CHARGE_BYPASS=OFF
+```
+
+- PC14（STM32F103C8T6 物理 3 脚）为推挽输出，复位默认低电平，水泥限流电阻接入（预充电）。
+- 只有 LM51770 当前确实处于充电周期的 ON 相位时 ON 才返回 `OK` 并拉高 PC14；周期 OFF 相位或非 CHARGE 状态返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
+- 进入周期 OFF 相位、退出 CHARGE、切换 DRIVE、过温或任何电源阶段切换都会先拉低 PC14。下一个 ON 相位从低电平开始，不会自动恢复全功率。
+- OFF 始终可请求恢复预充电状态。
+
+#### 5.4.4 充电时间设置与查询
 
 ```text
 AT+CHARGE_TIME=25
@@ -482,7 +514,7 @@ OK
 - `n=60` 表示连续 ON。内部仍以 60 秒为周期边界接收后续配置，但边界处不会切换 EN，因此不会每分钟重新软启动 LM51770。
 - CHARGE 开关表示间歇循环已启用，不表示 EN 在查询时刻必然开启。
 
-#### 5.4.4 器件 NTC 软件过温停机
+#### 5.4.5 器件 NTC 软件过温停机
 
 - 判断使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整周期的同步平均值。若 BATT_NTC 或 BATT_V 读取失败而五路器件通道成功，保护使用正式同步窗口加本周期器件样本得到的只读预览均值，不推进窗口，也不发布 SENSE。
 - 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、让电机进入 SLEEP；LED 不变。
@@ -839,7 +871,7 @@ AT+DRIVE=ON
 优先检查：
 
 - 是否发到了 UART1，而不是 UART2/UART3
-- 串口参数是否是 115200 8N1
+- 串口参数是否是 9600 8N1
 - 是否带了行结束符
 - 是否命令字使用了小写
 
