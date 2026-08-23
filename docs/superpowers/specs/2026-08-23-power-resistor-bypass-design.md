@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-23
 
-**Status:** Approved design, pending written-spec review
+**Status:** Approved written specification
 
 **Scope:** Restore the simultaneous AT/RS-485 firmware baseline at 9600 baud, add safety-interlocked PC13 and PC14 resistor-bypass controls, restore the host application to its 9600-baud baseline, document the protocol, and verify on hardware.
 
