@@ -3,6 +3,7 @@
 #include "app_charge_cycle.h"
 #include "app_config.h"
 #include "app_power_path.h"
+#include "app_resistor_bypass.h"
 #include "app_runtime.h"
 #include "app_state.h"
 #include "app_task_safety.h"
@@ -20,6 +21,16 @@ bool App_OutputEnqueueState(AppOutputTarget target, bool enabled)
             .target = target,
             .enabled = enabled,
         },
+    };
+
+    return osMessageQueuePut(g_app_runtime.output_queue, &request, 0U, 0U) == osOK;
+}
+
+bool App_OutputEnqueueChargeBypass(bool enabled)
+{
+    AppOutputRequest request = {
+        .type = APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS,
+        .data.charge_bypass_enabled = enabled,
     };
 
     return osMessageQueuePut(g_app_runtime.output_queue, &request, 0U, 0U) == osOK;
@@ -65,6 +76,12 @@ static void App_OutputApplyTarget(AppOutputTarget target, bool enabled)
         HAL_GPIO_WritePin(MP4317_GPIO_Port, MP4317_Pin, enabled ? GPIO_PIN_RESET : GPIO_PIN_SET);
         App_StateSetOutputEnabled(target, enabled);
         break;
+    case APP_OUTPUT_TARGET_CHARGE_BYPASS:
+        HAL_GPIO_WritePin(CHARGE_BYPASS_GPIO_Port,
+                          CHARGE_BYPASS_Pin,
+                          enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        App_StateSetOutputEnabled(target, enabled);
+        break;
     default:
         break;
     }
@@ -82,7 +99,13 @@ static bool App_OutputPowerRequestAllowed(AppPowerMode mode);
 
 static void App_OutputApplyPowerAction(AppChargeCycleAction action)
 {
-    if (action.apply_mode && App_OutputPowerRequestAllowed(action.mode))
+    if (!action.apply_mode)
+    {
+        return;
+    }
+
+    App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);
+    if (App_OutputPowerRequestAllowed(action.mode))
     {
         (void)App_PowerPathApply(action.mode,
                                  App_OutputWritePowerPath,
@@ -108,6 +131,24 @@ static bool App_OutputStateRequestAllowed(bool enabled)
     bool thermal_active = false;
     bool state_available = App_StateTryGetThermalProtectionActive(&thermal_active);
     return App_TaskSafetyAllowsOutput(state_available, thermal_active, enabled);
+}
+
+static void App_OutputApplyChargeBypassRequest(bool enabled)
+{
+    AppIoStatus io_status;
+
+    if (!enabled)
+    {
+        App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);
+        return;
+    }
+
+    if (App_OutputStateRequestAllowed(true)
+        && App_StateTryGetIoStatus(&io_status)
+        && App_ResistorBypassChargeActivationAllowed(io_status.uvlo_enabled))
+    {
+        App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, true);
+    }
 }
 
 static void App_OutputRefreshChargeConfiguration(AppChargeCycle *charge_cycle,
@@ -229,6 +270,12 @@ void App_NmosTask(void *argument)
         {
             App_OutputForceSafe(&charge_cycle);
             thermal_safe_applied = true;
+            continue;
+        }
+
+        if (request.type == APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS)
+        {
+            App_OutputApplyChargeBypassRequest(request.data.charge_bypass_enabled);
             continue;
         }
 

@@ -9,6 +9,8 @@ RUNTIME_SOURCE = (ROOT / "App/Src/app_runtime.c").read_text(encoding="utf-8")
 MOTOR_HEADER = (ROOT / "App/Inc/app_motor.h").read_text(encoding="utf-8")
 MOTOR_SOURCE = (ROOT / "App/Src/app_motor_task.c").read_text(encoding="utf-8")
 AT_TASK_SOURCE = (ROOT / "App/Src/app_at_task.c").read_text(encoding="utf-8")
+OUTPUT_HEADER = (ROOT / "App/Inc/app_output.h").read_text(encoding="utf-8")
+OUTPUT_SOURCE = (ROOT / "App/Src/app_output_task.c").read_text(encoding="utf-8")
 
 
 def require(text: str, source: str, description: str) -> None:
@@ -175,3 +177,75 @@ def test_pc13_has_no_unapproved_production_writer() -> None:
             continue
         source = source_path.read_text(encoding="utf-8", errors="ignore")
         assert write_token not in source, f"unapproved PC13 writer: {source_path}"
+
+
+def test_output_task_owns_and_revalidates_pc14_requests() -> None:
+    require(
+        "bool App_OutputEnqueueChargeBypass(bool enabled);",
+        OUTPUT_HEADER,
+        "charge bypass queue API missing",
+    )
+    require(
+        "bool App_OutputEnqueueChargeBypass(bool enabled)",
+        OUTPUT_SOURCE,
+        "charge bypass queue implementation missing",
+    )
+    require(
+        "APP_OUTPUT_REQUEST_SET_CHARGE_BYPASS",
+        OUTPUT_SOURCE,
+        "output task must consume typed charge bypass requests",
+    )
+    require(
+        "App_ResistorBypassChargeActivationAllowed",
+        OUTPUT_SOURCE,
+        "output owner must revalidate the actual charge output phase",
+    )
+    require(
+        "App_OutputStateRequestAllowed",
+        OUTPUT_SOURCE,
+        "output owner must revalidate thermal safety",
+    )
+
+
+def test_every_applied_power_action_restores_pc14_low_first() -> None:
+    apply_start = OUTPUT_SOURCE.index("static void App_OutputApplyPowerAction")
+    apply_end = OUTPUT_SOURCE.index("static void App_OutputShutDownAuxiliaryOutputs")
+    apply_source = OUTPUT_SOURCE[apply_start:apply_end]
+    require(
+        "App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);",
+        apply_source,
+        "every OFF, CHARGE, or DRIVE action must restore precharge first",
+    )
+    reset_index = apply_source.index(
+        "App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);"
+    )
+    power_index = apply_source.index("App_PowerPathApply")
+    assert reset_index < power_index, "PC14 must be low before power-path changes"
+
+
+def test_at_task_returns_state_error_before_queueing_pc14_on() -> None:
+    require(
+        "case APP_AT_COMMAND_SET_CHARGE_BYPASS:",
+        AT_TASK_SOURCE,
+        "AT handler must dispatch the charge bypass command",
+    )
+    require(
+        "App_OutputEnqueueChargeBypass",
+        AT_TASK_SOURCE,
+        "valid charge bypass requests must use the output owner queue",
+    )
+
+
+def test_pc14_has_no_unapproved_production_writer() -> None:
+    allowed_paths = {
+        ROOT / "Core/Src/gpio.c",
+        ROOT / "App/Src/app_runtime.c",
+        ROOT / "App/Src/app_output_task.c",
+    }
+    write_token = "HAL_GPIO_WritePin(CHARGE_BYPASS_GPIO_Port"
+
+    for source_path in ROOT.glob("**/*.c"):
+        if source_path in allowed_paths or "build" in source_path.parts:
+            continue
+        source = source_path.read_text(encoding="utf-8", errors="ignore")
+        assert write_token not in source, f"unapproved PC14 writer: {source_path}"

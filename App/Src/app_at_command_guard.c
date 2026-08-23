@@ -11,6 +11,7 @@ static bool App_AtCommandRequiresThermalPermission(const AppAtCommand *command)
     case APP_AT_COMMAND_SET_NMOS1:
     case APP_AT_COMMAND_SET_NMOS2:
     case APP_AT_COMMAND_SET_MOTOR_BYPASS:
+    case APP_AT_COMMAND_SET_CHARGE_BYPASS:
         return !App_ThermalAllowsOutputState(true, command->data.output.enabled);
     case APP_AT_COMMAND_SET_MOTOR_MODE:
         return !App_ThermalAllowsMotorMode(true, command->data.motor.mode);

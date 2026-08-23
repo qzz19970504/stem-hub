@@ -373,6 +373,29 @@ static void App_AtHandleMotorBypass(bool enabled)
         : App_RuntimeSendError("MOTOR_QUEUE");
 }
 
+static void App_AtHandleChargeBypass(bool enabled)
+{
+    AppIoStatus status;
+
+    if (enabled)
+    {
+        if (!App_StateTryGetIoStatus(&status))
+        {
+            App_RuntimeSendError("STATE_BUSY");
+            return;
+        }
+        if (!App_ResistorBypassChargeActivationAllowed(status.uvlo_enabled))
+        {
+            App_RuntimeSendError("STATE");
+            return;
+        }
+    }
+
+    App_OutputEnqueueChargeBypass(enabled)
+        ? App_RuntimeSendOk()
+        : App_RuntimeSendError("OUTPUT_QUEUE");
+}
+
 static void App_AtHandleCommand(const AppAtCommand *command)
 {
     bool queued = false;
@@ -435,6 +458,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         break;
     case APP_AT_COMMAND_SET_MOTOR_BYPASS:
         App_AtHandleMotorBypass(command->data.output.enabled);
+        break;
+    case APP_AT_COMMAND_SET_CHARGE_BYPASS:
+        App_AtHandleChargeBypass(command->data.output.enabled);
         break;
     case APP_AT_COMMAND_SET_NMOS1:
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS1, command->data.output.enabled);
