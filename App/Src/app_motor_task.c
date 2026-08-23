@@ -3,6 +3,7 @@
 #include "app_config.h"
 #include "app_motor_current.h"
 #include "app_motor_stall_guard.h"
+#include "app_resistor_bypass.h"
 #include "app_runtime.h"
 #include "app_state.h"
 #include "app_task_safety.h"
@@ -14,6 +15,14 @@ static void App_MotorSetOutputs(GPIO_PinState n_sleep,
     HAL_GPIO_WritePin(nSLEEP_GPIO_Port, nSLEEP_Pin, n_sleep);
     HAL_GPIO_WritePin(EN_IN1_GPIO_Port, EN_IN1_Pin, enable);
     HAL_GPIO_WritePin(PH_IN2_GPIO_Port, PH_IN2_Pin, phase);
+}
+
+static void App_MotorSetBypass(bool enabled)
+{
+    HAL_GPIO_WritePin(MOTOR_BYPASS_GPIO_Port,
+                      MOTOR_BYPASS_Pin,
+                      enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    App_StateSetMotorBypassEnabled(enabled);
 }
 
 static void App_MotorStoreStatus(AppMotorMode mode,
@@ -37,6 +46,11 @@ static void App_MotorApplyMode(AppMotorMode mode)
     {
         previous_mode = status.mode;
         overcurrent_latched = status.overcurrent_latched;
+    }
+
+    if (App_ResistorBypassMotorTransitionRequiresReset(previous_mode, mode))
+    {
+        App_MotorSetBypass(false);
     }
 
     switch (mode)
@@ -127,6 +141,16 @@ bool App_MotorEnqueueMode(AppMotorMode mode)
     return osMessageQueuePut(g_app_runtime.motor_queue, &request, 0U, 0U) == osOK;
 }
 
+bool App_MotorEnqueueBypass(bool enabled)
+{
+    AppMotorRequest request = {
+        .type = APP_MOTOR_REQUEST_SET_BYPASS,
+        .data.bypass_enabled = enabled,
+    };
+
+    return osMessageQueuePut(g_app_runtime.motor_queue, &request, 0U, 0U) == osOK;
+}
+
 bool App_MotorEnqueueThermalSleep(void)
 {
     AppMotorRequest request = {
@@ -145,6 +169,26 @@ bool App_MotorTryGetStatus(AppMotorStatus *status)
     return App_StateTryGetMotorStatus(status);
 }
 
+static void App_MotorApplyBypassRequest(bool enabled)
+{
+    AppMotorStatus status;
+    bool thermal_active = true;
+
+    if (!enabled)
+    {
+        App_MotorSetBypass(false);
+        return;
+    }
+
+    if (App_StateTryGetThermalProtectionActive(&thermal_active)
+        && !thermal_active
+        && App_MotorTryGetStatus(&status)
+        && App_ResistorBypassMotorActivationAllowed(status.mode))
+    {
+        App_MotorSetBypass(true);
+    }
+}
+
 void App_MotorTask(void *argument)
 {
     AppMotorRequest request;
@@ -160,22 +204,29 @@ void App_MotorTask(void *argument)
     {
         if (osMessageQueueGet(g_app_runtime.motor_queue, &request, NULL, APP_MOTOR_MONITOR_PERIOD_MS) == osOK)
         {
-            bool thermal_active = false;
-            bool state_available =
-                App_StateTryGetThermalProtectionActive(&thermal_active);
-            if (App_TaskSafetyAllowsMotor(state_available,
-                                          thermal_active,
-                                          request.data.mode))
+            if (request.type == APP_MOTOR_REQUEST_SET_BYPASS)
             {
-                App_MotorApplyMode(request.data.mode);
-                if ((request.data.mode == APP_MOTOR_MODE_FORWARD)
-                    || (request.data.mode == APP_MOTOR_MODE_REVERSE))
+                App_MotorApplyBypassRequest(request.data.bypass_enabled);
+            }
+            else if (request.type == APP_MOTOR_REQUEST_SET_MODE)
+            {
+                bool thermal_active = false;
+                bool state_available =
+                    App_StateTryGetThermalProtectionActive(&thermal_active);
+                if (App_TaskSafetyAllowsMotor(state_available,
+                                              thermal_active,
+                                              request.data.mode))
                 {
-                    App_MotorStallGuardStart(&stall_guard, HAL_GetTick());
-                }
-                else
-                {
-                    App_MotorStallGuardStop(&stall_guard);
+                    App_MotorApplyMode(request.data.mode);
+                    if ((request.data.mode == APP_MOTOR_MODE_FORWARD)
+                        || (request.data.mode == APP_MOTOR_MODE_REVERSE))
+                    {
+                        App_MotorStallGuardStart(&stall_guard, HAL_GetTick());
+                    }
+                    else
+                    {
+                        App_MotorStallGuardStop(&stall_guard);
+                    }
                 }
             }
         }
@@ -226,6 +277,7 @@ void App_MotorTask(void *argument)
                                       current_ma,
                                       stall_current_ma))
         {
+            App_MotorSetBypass(false);
             App_MotorSetOutputs(GPIO_PIN_SET, GPIO_PIN_RESET, HAL_GPIO_ReadPin(PH_IN2_GPIO_Port, PH_IN2_Pin));
             App_MotorStallGuardStop(&stall_guard);
             App_MotorStoreStatus(APP_MOTOR_MODE_BRAKE, current_ma, true);

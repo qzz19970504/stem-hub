@@ -16,3 +16,16 @@ bool App_ResistorBypassRequestAllowed(bool requested_enabled,
 {
     return !requested_enabled || activation_allowed;
 }
+
+bool App_ResistorBypassMotorTransitionRequiresReset(
+    AppMotorMode previous_mode,
+    AppMotorMode requested_mode)
+{
+    if (!App_ResistorBypassMotorActivationAllowed(requested_mode))
+    {
+        return true;
+    }
+
+    return App_ResistorBypassMotorActivationAllowed(previous_mode)
+        && (previous_mode != requested_mode);
+}

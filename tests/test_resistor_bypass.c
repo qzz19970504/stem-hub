@@ -31,11 +31,44 @@ static void TestEnableRequestUsesActivationPolicy(void)
     assert(App_ResistorBypassRequestAllowed(true, true));
 }
 
+static void TestNonRunningMotorTransitionRequiresReset(void)
+{
+    assert(App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_FORWARD,
+        APP_MOTOR_MODE_STOP));
+    assert(App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_REVERSE,
+        APP_MOTOR_MODE_SLEEP));
+}
+
+static void TestDirectionChangeRequiresReset(void)
+{
+    assert(App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_FORWARD,
+        APP_MOTOR_MODE_REVERSE));
+    assert(App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_REVERSE,
+        APP_MOTOR_MODE_FORWARD));
+}
+
+static void TestRepeatedRunningDirectionKeepsAppliedBypass(void)
+{
+    assert(!App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_FORWARD,
+        APP_MOTOR_MODE_FORWARD));
+    assert(!App_ResistorBypassMotorTransitionRequiresReset(
+        APP_MOTOR_MODE_REVERSE,
+        APP_MOTOR_MODE_REVERSE));
+}
+
 int main(void)
 {
     TestMotorActivationRequiresRunningDirection();
     TestChargeActivationRequiresActualOutput();
     TestDisableRequestIsAlwaysAllowed();
     TestEnableRequestUsesActivationPolicy();
+    TestNonRunningMotorTransitionRequiresReset();
+    TestDirectionChangeRequiresReset();
+    TestRepeatedRunningDirectionKeepsAppliedBypass();
     return 0;
 }

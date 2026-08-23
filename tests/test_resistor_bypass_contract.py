@@ -6,6 +6,9 @@ MAIN_HEADER = (ROOT / "Core/Inc/main.h").read_text(encoding="utf-8")
 GPIO_SOURCE = (ROOT / "Core/Src/gpio.c").read_text(encoding="utf-8")
 IOC = (ROOT / "stem-hub.ioc").read_text(encoding="utf-8")
 RUNTIME_SOURCE = (ROOT / "App/Src/app_runtime.c").read_text(encoding="utf-8")
+MOTOR_HEADER = (ROOT / "App/Inc/app_motor.h").read_text(encoding="utf-8")
+MOTOR_SOURCE = (ROOT / "App/Src/app_motor_task.c").read_text(encoding="utf-8")
+AT_TASK_SOURCE = (ROOT / "App/Src/app_at_task.c").read_text(encoding="utf-8")
 
 
 def require(text: str, source: str, description: str) -> None:
@@ -86,3 +89,89 @@ def test_runtime_safe_initialization_clears_both_bypasses() -> None:
         RUNTIME_SOURCE,
         "runtime safe initialization must clear PC14",
     )
+
+
+def test_motor_task_owns_and_revalidates_pc13_requests() -> None:
+    require(
+        "bool App_MotorEnqueueBypass(bool enabled);",
+        MOTOR_HEADER,
+        "motor bypass queue API missing",
+    )
+    require(
+        "bool App_MotorEnqueueBypass(bool enabled)",
+        MOTOR_SOURCE,
+        "motor bypass queue implementation missing",
+    )
+    require(
+        "APP_MOTOR_REQUEST_SET_BYPASS",
+        MOTOR_SOURCE,
+        "motor task must consume typed bypass requests",
+    )
+    require(
+        "App_ResistorBypassMotorActivationAllowed",
+        MOTOR_SOURCE,
+        "motor owner must revalidate the applied running mode",
+    )
+    apply_start = MOTOR_SOURCE.index("static void App_MotorApplyBypassRequest")
+    apply_end = MOTOR_SOURCE.index("void App_MotorTask", apply_start)
+    apply_source = MOTOR_SOURCE[apply_start:apply_end]
+    require(
+        "App_StateTryGetThermalProtectionActive",
+        apply_source,
+        "motor owner must revalidate thermal state before raising PC13",
+    )
+    require(
+        "!thermal_active",
+        apply_source,
+        "motor owner must reject activation while thermal protection is active",
+    )
+
+
+def test_motor_transitions_and_stall_restore_pc13_low() -> None:
+    require(
+        "App_ResistorBypassMotorTransitionRequiresReset",
+        MOTOR_SOURCE,
+        "motor mode transitions must use the tested reset policy",
+    )
+    require(
+        "App_MotorSetBypass(false);",
+        MOTOR_SOURCE,
+        "motor safety paths must clear PC13",
+    )
+    stall_start = MOTOR_SOURCE.index("if (App_MotorStallGuardUpdate")
+    bypass_reset = MOTOR_SOURCE.index("App_MotorSetBypass(false);", stall_start)
+    bridge_disable = MOTOR_SOURCE.index("App_MotorSetOutputs(", stall_start)
+    assert bypass_reset < bridge_disable, "stall braking must clear PC13 before EN"
+
+
+def test_at_task_returns_state_error_before_queueing_pc13_on() -> None:
+    require(
+        "case APP_AT_COMMAND_SET_MOTOR_BYPASS:",
+        AT_TASK_SOURCE,
+        "AT handler must dispatch the motor bypass command",
+    )
+    require(
+        'App_RuntimeSendError("STATE")',
+        AT_TASK_SOURCE,
+        "invalid motor activation must return ERROR:STATE",
+    )
+    require(
+        "App_MotorEnqueueBypass",
+        AT_TASK_SOURCE,
+        "valid motor bypass requests must use the motor owner queue",
+    )
+
+
+def test_pc13_has_no_unapproved_production_writer() -> None:
+    allowed_paths = {
+        ROOT / "Core/Src/gpio.c",
+        ROOT / "App/Src/app_runtime.c",
+        ROOT / "App/Src/app_motor_task.c",
+    }
+    write_token = "HAL_GPIO_WritePin(MOTOR_BYPASS_GPIO_Port"
+
+    for source_path in ROOT.glob("**/*.c"):
+        if source_path in allowed_paths or "build" in source_path.parts:
+            continue
+        source = source_path.read_text(encoding="utf-8", errors="ignore")
+        assert write_token not in source, f"unapproved PC13 writer: {source_path}"
