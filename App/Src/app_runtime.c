@@ -107,6 +107,8 @@ void App_RuntimeInit(void)
     HAL_GPIO_WritePin(nSLEEP_GPIO_Port, nSLEEP_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(EN_IN1_GPIO_Port, EN_IN1_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(PH_IN2_GPIO_Port, PH_IN2_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(MOTOR_BYPASS_GPIO_Port, MOTOR_BYPASS_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(CHARGE_BYPASS_GPIO_Port, CHARGE_BYPASS_Pin, GPIO_PIN_RESET);
 
     if (!App_StateSetStallCurrentMa(App_StallConfigLoadCurrentMa()))
     {
