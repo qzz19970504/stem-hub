@@ -1,6 +1,7 @@
 #include "app_led.h"
 
 #include "app_runtime.h"
+#include "app_power_path.h"
 #include "app_state.h"
 
 #define APP_LED_STARTUP_TOTAL_MS 5000U
@@ -40,7 +41,7 @@ void App_LedTask(void *argument)
 {
     AppLedRequest request;
     AppMotorMode mode = APP_MOTOR_MODE_SLEEP;
-    bool led_master_enabled = true;
+    bool led_master_enabled = false;
 
     (void)argument;
 
@@ -50,7 +51,14 @@ void App_LedTask(void *argument)
     {
         if (osMessageQueueGet(g_app_runtime.led_queue, &request, NULL, 100U) == osOK)
         {
-            App_StateSetLedMasterEnabled(request.enabled);
+            AppIoStatus io_status;
+            bool activation_allowed = !request.enabled
+                || (App_StateTryGetIoStatus(&io_status)
+                    && App_PowerPathAllowsAuxiliaryOutput(io_status.power_mode));
+            if (activation_allowed)
+            {
+                App_StateSetLedMasterEnabled(request.enabled);
+            }
         }
 
         (void)App_StateTryGetLedAndMotor(&led_master_enabled, &mode);

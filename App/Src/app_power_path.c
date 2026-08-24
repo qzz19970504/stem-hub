@@ -6,6 +6,11 @@ bool App_OutputTargetAllowsDirectControl(AppOutputTarget target)
         || (target == APP_OUTPUT_TARGET_NMOS2);
 }
 
+bool App_PowerPathAllowsAuxiliaryOutput(AppPowerMode power_mode)
+{
+    return power_mode == APP_POWER_MODE_DRIVE;
+}
+
 bool App_PowerPathApply(AppPowerMode mode,
                         AppPowerPathWrite write,
                         void *context)

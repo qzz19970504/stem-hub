@@ -76,13 +76,20 @@ def test_error_response_is_not_accepted_until_its_crlf_is_complete() -> None:
 def test_default_sequence_only_checks_handshake_and_inactive_interlocks() -> None:
     runner = load_runner()
     responses = {
-        b"AT+VERSION?\r\n": b"+VERSION:release-v3.2\r\nOK\r\n",
+        b"AT+VERSION?\r\n": b"+VERSION:release-v3.3\r\nOK\r\n",
+        b"AT+OUTPUT?\r\n": (
+            b"+OUTPUT:POWER=OFF,CHARGE_PHASE=IDLE,NMOS1=0,NMOS2=0,"
+            b"LIGHTS=0,MOTOR_BYPASS=0,CHARGE_BYPASS=0\r\nOK\r\n"
+        ),
         b"AT+MOTOR=STOP\r\n": b"OK\r\n",
-        b"AT+CHARGE=OFF\r\n": b"OK\r\n",
+        b"AT+POWER=OFF\r\n": b"OK\r\n",
         b"AT+MOTOR_BYPASS=OFF\r\n": b"OK\r\n",
         b"AT+MOTOR_BYPASS=ON\r\n": b"ERROR:STATE\r\n",
         b"AT+CHARGE_BYPASS=OFF\r\n": b"OK\r\n",
         b"AT+CHARGE_BYPASS=ON\r\n": b"ERROR:STATE\r\n",
+        b"AT+NMOS1=ON\r\n": b"ERROR:STATE\r\n",
+        b"AT+NMOS2=ON\r\n": b"ERROR:STATE\r\n",
+        b"AT+LED=ON\r\n": b"ERROR:STATE\r\n",
     }
     port = FakeSerial(responses)
 
@@ -90,6 +97,32 @@ def test_default_sequence_only_checks_handshake_and_inactive_interlocks() -> Non
 
     assert b"AT+MOTOR=FWD\r\n" not in port.writes
     assert b"AT+CHARGE=ON\r\n" not in port.writes
+    assert port.writes[0] == b"AT+VERSION?\r\n"
+    assert port.writes[-1] == b"AT+OUTPUT?\r\n"
+
+
+def test_output_query_requires_the_complete_v3_3_shape() -> None:
+    runner = load_runner()
+    port = FakeSerial(
+        {
+            b"AT+OUTPUT?\r\n": (
+                b"+OUTPUT:POWER=CHARGE,CHARGE_PHASE=OFF,NMOS1=0,NMOS2=0,"
+                b"LIGHTS=0,MOTOR_BYPASS=0,CHARGE_BYPASS=1\r\nOK\r\n"
+            )
+        }
+    )
+
+    state = runner.query_output(port)
+
+    assert state == {
+        "POWER": "CHARGE",
+        "CHARGE_PHASE": "OFF",
+        "NMOS1": "0",
+        "NMOS2": "0",
+        "LIGHTS": "0",
+        "MOTOR_BYPASS": "0",
+        "CHARGE_BYPASS": "1",
+    }
 
 
 def test_cleanup_order_forces_both_bypasses_and_loads_off() -> None:

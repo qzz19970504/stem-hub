@@ -14,6 +14,8 @@
 #include "app_led.h"
 #include "app_motor.h"
 #include "app_output.h"
+#include "app_output_status.h"
+#include "app_power_path.h"
 #include "app_resistor_bypass.h"
 #include "app_runtime.h"
 #include "app_state.h"
@@ -349,6 +351,50 @@ static void App_AtReplyStallCurrent(void)
     App_RuntimeSendText(&huart1, buffer);
 }
 
+static void App_AtReplyOutput(void)
+{
+    char buffer[192];
+    AppIoStatus status;
+
+    if (!App_StateTryGetIoStatus(&status))
+    {
+        App_RuntimeSendError("STATE_BUSY");
+        return;
+    }
+
+    if (!App_OutputStatusFormat(buffer, sizeof(buffer), &status))
+    {
+        App_RuntimeSendError("OUTPUT_FORMAT");
+        return;
+    }
+
+    App_RuntimeSendText(&huart1, buffer);
+}
+
+static bool App_AtAuxiliaryActivationAllowed(bool enabled)
+{
+    AppIoStatus status;
+
+    if (!enabled)
+    {
+        return true;
+    }
+
+    if (!App_StateTryGetIoStatus(&status))
+    {
+        App_RuntimeSendError("STATE_BUSY");
+        return false;
+    }
+
+    if (!App_PowerPathAllowsAuxiliaryOutput(status.power_mode))
+    {
+        App_RuntimeSendError("STATE");
+        return false;
+    }
+
+    return true;
+}
+
 static void App_AtHandleMotorBypass(bool enabled)
 {
     AppMotorStatus status;
@@ -384,7 +430,7 @@ static void App_AtHandleChargeBypass(bool enabled)
             App_RuntimeSendError("STATE_BUSY");
             return;
         }
-        if (!App_ResistorBypassChargeActivationAllowed(status.uvlo_enabled))
+        if (!App_ResistorBypassChargeActivationAllowed(status.power_mode))
         {
             App_RuntimeSendError("STATE");
             return;
@@ -449,6 +495,10 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         App_RuntimeSendOk();
         break;
     case APP_AT_COMMAND_SET_LED_MASTER:
+        if (!App_AtAuxiliaryActivationAllowed(command->data.led.enabled))
+        {
+            break;
+        }
         queued = App_LedEnqueueState(command->data.led.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("LED_QUEUE");
         break;
@@ -463,10 +513,18 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         App_AtHandleChargeBypass(command->data.output.enabled);
         break;
     case APP_AT_COMMAND_SET_NMOS1:
+        if (!App_AtAuxiliaryActivationAllowed(command->data.output.enabled))
+        {
+            break;
+        }
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS1, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
     case APP_AT_COMMAND_SET_NMOS2:
+        if (!App_AtAuxiliaryActivationAllowed(command->data.output.enabled))
+        {
+            break;
+        }
         queued = App_OutputEnqueueState(APP_OUTPUT_TARGET_NMOS2, command->data.output.enabled);
         queued ? App_RuntimeSendOk() : App_RuntimeSendError("OUTPUT_QUEUE");
         break;
@@ -516,6 +574,9 @@ static void App_AtHandleCommand(const AppAtCommand *command)
         break;
     case APP_AT_COMMAND_QUERY_MOTOR:
         App_AtReplyMotor();
+        break;
+    case APP_AT_COMMAND_QUERY_OUTPUT:
+        App_AtReplyOutput();
         break;
     case APP_AT_COMMAND_QUERY_DIAG:
         App_AtReplyDiag();

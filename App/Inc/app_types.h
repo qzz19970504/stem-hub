@@ -41,6 +41,8 @@ typedef struct
 
 typedef struct
 {
+    AppPowerMode power_mode;
+    AppChargePhase charge_phase;
     bool led_master_enabled;
     bool nmos1_enabled;
     bool nmos2_enabled;

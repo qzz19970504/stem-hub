@@ -90,17 +90,17 @@ PA11--nFLT
 1. 一次 `AT+CHARGE=ON` 启动持续的 10 秒充电、50 秒全关循环；循环持续到 OFF、DRIVE 或 MCU 复位。
 2. 重复发送 `AT+CHARGE=ON` 不重置当前阶段计时。`AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 和 `AT+DRIVE=ON` 都能立即中断循环。
 3. 每次重新打开 LM51770 仍执行“先关 LM51770、再关 MP4317、只开 LM51770”的互锁顺序。计时使用绝对 RTOS Tick 截止值，不新增任务或任务栈，并支持 32 位 Tick 回绕。
-4. 上位机 CHARGE 开关表示循环已启用，不代表 LM51770 EN 此刻一定处于开启阶段；本版不新增相位查询指令。
+4. 上位机 CHARGE 开关表示循环已启用，不代表 LM51770 EN 此刻一定处于开启阶段；v3.3 可通过 `AT+OUTPUT?` 的 `CHARGE_PHASE` 查询实际相位。
 5. 该循环的时间配置不构成独立安全保证；当前 v3.2 另有五路器件 NTC 软件保护，但仍不能替代硬件限流、功率器件选型和散热设计。查明实际电流、功率器件和散热问题前不得进行无人值守满功率测试。
 
 ## v3.2 语义化温度遥测与 NTC 停机
 
-固件与上位机通过 `+VERSION:release-v3.2` + `OK` 精确握手。`AT+SENSE?` 按固定顺序返回 `BATT_NTC,BATT_V,MCU_C,LM51770_C,MP4317_C,DRV8874_C,CHARGE_MOS_C,MOTOR_I,TICK,COUNT,STK_AT,STK_SENSOR,STK_MOTOR,TX_SP,TX_LS`；不提供旧编号 NTC 字段兼容。
+固件与上位机通过 `+VERSION:release-v3.3` + `OK` 精确握手。`AT+SENSE?` 按固定顺序返回语义化传感字段；`AT+OUTPUT?` 固定返回请求电源模式、实际充电相位和全部输出应用状态。
 
 1. `AT+CHARGE_TIME=n` 将固定 60 秒周期中的 ON 时间设置为 1～60 秒；`AT+CHARGE_TIME=?` 精确返回 `+CHARGE_TIME:<n>\r\nOK\r\n`。默认值为 10，只保存于 RAM，复位恢复 10 秒 ON / 50 秒 OFF。
 2. 运行中修改配置不改变当前 ON/OFF 相位及其绝对截止 Tick，从下一次 ON 相位开始对整个新周期生效。`n=60` 为连续 ON，内部 60 秒边界不切 EN，不让 LM51770 每分钟重新软启动。CHARGE 开关仍只表示循环启用，不表示 EN 此刻必然打开。
 3. MCU_C、LM51770_C、MP4317_C、DRV8874_C、CHARGE_MOS_C 在七路采样全部成功时使用与 `AT+SENSE?` 相同的最近五个完整周期均值。若 BATT_NTC 或 BATT_V 失败而五路器件样本成功，保护使用正式同步窗口加本周期器件样本计算只读预览均值，不推进窗口、不发布 SENSE。任一路严格高于 60.0°C、温度换算无效或 ADC 读取失败，即锁存过温保护；BATT_NTC 仅显示。
-4. 触发后取消 CHARGE/DRIVE、关闭 LM51770/MP4317 和 NMOS1/2，并让电机进入 SLEEP；LED 状态不变。停机使用高优先级队列，输出/电机消费者另以 100 ms 周期复查锁存，阻止旧的排队开启请求复活输出。
+4. 触发后取消 CHARGE/DRIVE、关闭 LM51770/MP4317、NMOS1/2、LIGHTS 和两路旁路，并让电机进入 SLEEP。停机使用高优先级队列，输出/电机消费者另以 100 ms 周期复查锁存，阻止旧的排队开启请求复活输出。
 5. 只有五路受保护器件温度都有效且全部不高于 55.0°C 才解除锁存；解除只恢复人工命令权限，不自动恢复停机前状态。保护期间 OFF、MOTOR SLEEP、查询及 CHARGE_TIME 命令仍可用，危险开启命令返回 `ERROR:OVER_TEMPERATURE`；共享状态暂时不可读时返回 `ERROR:STATE_BUSY` 并按安全失败处理。
 6. 五周期平均会引入最多约数秒的热响应延迟。该功能与可调充电占空均为测试/降额措施，不替代硬件限流、器件选型、散热和独立温度保护；禁止无人值守带载。文档不代表已经完成加热 NTC 的实机端到端测试。
 
@@ -118,5 +118,5 @@ PA11--nFLT
 1. UART1、UART2、UART3 均使用 9600 8N1；电机运行时普通 AT 解析及 UART2/UART3 通信继续工作，不使用独占透传模式。
 2. PC13（STM32F103C8T6 物理 2 脚）配置为推挽输出且默认低电平，低电平保留电机启动限流电阻。电机进入 FWD/REV 后可发送 `AT+MOTOR_BYPASS=ON` 拉高并短接电阻；`AT+MOTOR_BYPASS=OFF` 恢复低电平。
 3. PC13 的 ON 只在 FWD/REV 状态接受，否则返回 `ERROR:STATE`；状态暂不可读返回 `ERROR:STATE_BUSY`。STOP、BRAKE、SLEEP、堵转、过温及 FWD/REV 换向均自动拉低，换向后必须重新 ON。
-4. PC14（物理 3 脚）配置为推挽输出且默认低电平，低电平为水泥电阻参与限流的预充电。只有 LM51770 处于充电循环的实际 ON 相位时，`AT+CHARGE_BYPASS=ON` 才拉高 PC14 进入全功率；`AT+CHARGE_BYPASS=OFF` 恢复预充电。
-5. PC14 在周期 OFF、退出 CHARGE、切换 DRIVE、过温或任何电源阶段切换时自动拉低；每个新的 ON 相位都从低电平开始，不自动恢复旁路。两条 OFF 指令始终允许作为安全关闭请求。
+4. PC14（物理 3 脚）配置为推挽输出且默认低电平。请求模式为 CHARGE 时即可用 `AT+CHARGE_BYPASS=ON` 拉高 PC14；它跨周期 OFF 相位锁存，使下一 ON 相位从开始即旁路限流电阻。
+5. PC14 在退出 CHARGE、切换 DRIVE、过温、强制安全停机或复位时自动拉低。NMOS1、NMOS2、LIGHTS 只有 DRIVE 模式可开启，离开 DRIVE 自动关闭；所有 OFF 请求始终允许。

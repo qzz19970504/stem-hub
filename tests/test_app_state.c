@@ -63,6 +63,26 @@ static void TestResistorBypassesDefaultDisabled(void)
     assert(App_StateTryGetIoStatus(&io_status));
     assert(!io_status.motor_bypass_enabled);
     assert(!io_status.charge_bypass_enabled);
+    assert(!io_status.led_master_enabled);
+    assert(io_status.power_mode == APP_POWER_MODE_OFF);
+    assert(io_status.charge_phase == APP_CHARGE_PHASE_IDLE);
+}
+
+static void TestPowerModeAndChargePhaseCanChange(void)
+{
+    AppIoStatus io_status = {0};
+
+    App_StateSetPowerStatus(APP_POWER_MODE_CHARGE, APP_CHARGE_PHASE_ON);
+    assert(App_StateTryGetIoStatus(&io_status));
+    assert(io_status.power_mode == APP_POWER_MODE_CHARGE);
+    assert(io_status.charge_phase == APP_CHARGE_PHASE_ON);
+
+    App_StateSetPowerStatus(APP_POWER_MODE_CHARGE, APP_CHARGE_PHASE_OFF);
+    assert(App_StateTryGetIoStatus(&io_status));
+    assert(io_status.power_mode == APP_POWER_MODE_CHARGE);
+    assert(io_status.charge_phase == APP_CHARGE_PHASE_OFF);
+
+    App_StateSetPowerStatus(APP_POWER_MODE_OFF, APP_CHARGE_PHASE_IDLE);
 }
 
 static void TestResistorBypassAppliedStateCanChange(void)
@@ -214,6 +234,7 @@ static void TestMissingStateMutexFailsSafely(void)
 int main(void)
 {
     TestResistorBypassesDefaultDisabled();
+    TestPowerModeAndChargePhaseCanChange();
     TestResistorBypassAppliedStateCanChange();
     TestOwnerRequestsCarryBypassState();
     TestChargeTimeDefaultsToTenSeconds();

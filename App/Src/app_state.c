@@ -22,7 +22,9 @@ static AppState g_app_state = {
         .drv_fault_active = false,
     },
     .io_status = {
-        .led_master_enabled = true,
+        .power_mode = APP_POWER_MODE_OFF,
+        .charge_phase = APP_CHARGE_PHASE_IDLE,
+        .led_master_enabled = false,
         .nmos1_enabled = false,
         .nmos2_enabled = false,
         .uvlo_enabled = false,
@@ -233,6 +235,17 @@ bool App_StateTryGetIoStatus(AppIoStatus *status)
     *status = g_app_state.io_status;
     (void)osMutexRelease(g_app_runtime.state_mutex);
     return true;
+}
+
+void App_StateSetPowerStatus(AppPowerMode power_mode,
+                             AppChargePhase charge_phase)
+{
+    if (osMutexAcquire(g_app_runtime.state_mutex, osWaitForever) == osOK)
+    {
+        g_app_state.io_status.power_mode = power_mode;
+        g_app_state.io_status.charge_phase = charge_phase;
+        (void)osMutexRelease(g_app_runtime.state_mutex);
+    }
 }
 
 bool App_StateSetChargeOnTimeSeconds(uint32_t seconds)

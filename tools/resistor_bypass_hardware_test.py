@@ -16,7 +16,19 @@ CLEANUP_COMMANDS = (
     "AT+MOTOR_BYPASS=OFF",
     "AT+MOTOR=STOP",
     "AT+CHARGE_BYPASS=OFF",
-    "AT+CHARGE=OFF",
+    "AT+NMOS1=OFF",
+    "AT+NMOS2=OFF",
+    "AT+LED=OFF",
+    "AT+POWER=OFF",
+)
+OUTPUT_FIELDS = (
+    "POWER",
+    "CHARGE_PHASE",
+    "NMOS1",
+    "NMOS2",
+    "LIGHTS",
+    "MOTOR_BYPASS",
+    "CHARGE_BYPASS",
 )
 
 
@@ -65,15 +77,59 @@ def send_command(
     return response
 
 
+def query_output(port: Any) -> dict[str, str]:
+    """Query and strictly validate the release-v3.3 output-state shape."""
+    response = send_command(port, "AT+OUTPUT?")
+    payload_lines = [
+        line.decode("ascii")
+        for line in response.split(b"\r\n")
+        if line.startswith(b"+OUTPUT:")
+    ]
+    if len(payload_lines) != 1:
+        raise RuntimeError(f"AT+OUTPUT? returned no unique payload; raw={response.hex(' ')}")
+
+    fields: dict[str, str] = {}
+    for item in payload_lines[0].removeprefix("+OUTPUT:").split(","):
+        if item.count("=") != 1:
+            raise RuntimeError(f"malformed OUTPUT field: {item!r}")
+        key, value = item.split("=", 1)
+        if key in fields:
+            raise RuntimeError(f"duplicate OUTPUT field: {key}")
+        fields[key] = value
+    if tuple(fields) != OUTPUT_FIELDS:
+        raise RuntimeError(f"unexpected OUTPUT fields: {tuple(fields)!r}")
+    if fields["POWER"] not in {"OFF", "CHARGE", "DRIVE"}:
+        raise RuntimeError(f"invalid POWER value: {fields['POWER']!r}")
+    if fields["CHARGE_PHASE"] not in {"IDLE", "ON", "OFF"}:
+        raise RuntimeError(f"invalid CHARGE_PHASE value: {fields['CHARGE_PHASE']!r}")
+    if any(fields[key] not in {"0", "1"} for key in OUTPUT_FIELDS[2:]):
+        raise RuntimeError(f"invalid boolean OUTPUT value: {fields!r}")
+    return fields
+
+
 def run_default_sequence(port: Any) -> None:
     """Check communication and fail-closed behavior without energizing loads."""
-    send_command(port, "AT+VERSION?", "+VERSION:")
+    send_command(port, "AT+VERSION?", "+VERSION:release-v3.3")
     send_command(port, "AT+MOTOR=STOP")
-    send_command(port, "AT+CHARGE=OFF")
+    send_command(port, "AT+POWER=OFF")
     send_command(port, "AT+MOTOR_BYPASS=OFF")
     send_command(port, "AT+MOTOR_BYPASS=ON", "ERROR:STATE")
     send_command(port, "AT+CHARGE_BYPASS=OFF")
     send_command(port, "AT+CHARGE_BYPASS=ON", "ERROR:STATE")
+    send_command(port, "AT+NMOS1=ON", "ERROR:STATE")
+    send_command(port, "AT+NMOS2=ON", "ERROR:STATE")
+    send_command(port, "AT+LED=ON", "ERROR:STATE")
+    state = query_output(port)
+    if state != {
+        "POWER": "OFF",
+        "CHARGE_PHASE": "IDLE",
+        "NMOS1": "0",
+        "NMOS2": "0",
+        "LIGHTS": "0",
+        "MOTOR_BYPASS": "0",
+        "CHARGE_BYPASS": "0",
+    }:
+        raise RuntimeError(f"default safe state mismatch: {state!r}")
 
 
 def run_load_sequence(

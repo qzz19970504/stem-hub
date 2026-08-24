@@ -2,7 +2,7 @@
 
 基于 STM32F103C8T6 和 FreeRTOS 的嵌入式控制项目，当前聚焦于多路 ADC 采集、DRV8874 电机驱动、UART AT 指令控制，以及 UART1 与 UART2/UART3 之间的可控双向二进制隧道。
 
-当前固件版本为 `release-v3.2`。本版使用语义化温度通道，增加 MCU、LM51770、MP4317、DRV8874 和 LM51770 充电 MOS 五路器件温度。固件按固定顺序发送 SENSE 字段；v3.2 上位机严格要求完整、无重复的语义字段集合。
+当前固件版本为 `release-v3.3`。本版在 v3.2 语义化温度遥测基础上增加完整输出状态查询、CHARGE 模式旁路锁存，以及 DRIVE 子输出固件联锁。
 
 ## 快速开始
 
@@ -197,13 +197,13 @@ at+led=on\r\n
 | AT+MOTOR=STOP | 电机停止，当前实现等同制动 |
 | AT+MOTOR_BYPASS=ON | 仅在 FWD/REV 已启动后拉高 PC13，短接电机启动限流电阻 |
 | AT+MOTOR_BYPASS=OFF | 拉低 PC13，恢复电机启动限流电阻 |
-| AT+NMOS1=ON | 打开 NMOS1 |
+| AT+NMOS1=ON | 仅在 DRIVE 模式打开 NMOS1 |
 | AT+NMOS1=OFF | 关闭 NMOS1 |
-| AT+NMOS2=ON | 打开 NMOS2 |
+| AT+NMOS2=ON | 仅在 DRIVE 模式打开 NMOS2 |
 | AT+NMOS2=OFF | 关闭 NMOS2 |
 | AT+CHARGE=ON | 启动 LM51770 的 60 秒间歇充电循环；默认 10 秒开 / 50 秒关 |
 | AT+CHARGE=OFF | 同时关闭 LM51770 与 MP4317 |
-| AT+CHARGE_BYPASS=ON | 仅在 LM51770 实际 ON 相位拉高 PC14，短接充电限流电阻 |
+| AT+CHARGE_BYPASS=ON | 仅在请求模式为 CHARGE 时拉高 PC14，并跨周期 OFF 相位保持旁路 |
 | AT+CHARGE_BYPASS=OFF | 拉低 PC14，恢复充电限流电阻 |
 | AT+DRIVE=ON | 先关闭 LM51770 与 MP4317，再仅打开 MP4317 |
 | AT+DRIVE=OFF | 同时关闭 LM51770 与 MP4317 |
@@ -218,10 +218,11 @@ at+led=on\r\n
 | AT+SENSE? | 读取最近传感快照；七路 1 Hz 传感 ADC 为最近五个完整周期的同步均值 | +SENSE:BATT_NTC=25.1C,BATT_V=37.0V,MCU_C=25.3C,LM51770_C=25.2C,MP4317_C=25.4C,DRV8874_C=26.1C,CHARGE_MOS_C=24.8C,MOTOR_I=0.8A,TICK=4567,COUNT=8,STK_AT=512,STK_SENSOR=384,STK_MOTOR=420,TX_SP=0,TX_LS=0 |
 | AT+FAULT? | 读取 nFAULT 和 nFLT 状态 | +FAULT:DRV=0,AUX=0 |
 | AT+MOTOR? | 读取电机当前模式、电流和故障状态 | +MOTOR:MODE=FWD,CURRENT_MA=820,OVERCURRENT=0,FAULT=0 |
+| AT+OUTPUT? | 读取电源请求模式、充电实际相位及全部输出应用状态 | +OUTPUT:POWER=CHARGE,CHARGE_PHASE=OFF,NMOS1=0,NMOS2=0,LIGHTS=0,MOTOR_BYPASS=0,CHARGE_BYPASS=1 |
 | AT+DIAG? | 读取 UART1 控制链路、发送状态、传感任务及 UART2/UART3 接收计数器 | +DIAG:RX_ISR=1234,...,UART2_RX_BYTE=20,UART2_RX_OVERFLOW=0,UART3_RX_BYTE=12,UART3_RX_OVERFLOW=0 |
 | AT+CHARGE_TIME=? | 查询当前 RAM 内充电开启时间 | +CHARGE_TIME:10 |
 | AT+STALL_CURRENT=? | 查询当前堵转电流阈值（mA） | +STALL_CURRENT:4000 |
-| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.2 |
+| AT+VERSION? | 读取固件版本号（用于上位机握手） | +VERSION:release-v3.3 |
 
 控制类命令成功时返回：
 
@@ -243,13 +244,18 @@ ERROR:MOTOR_RUNNING
 ERROR:FLASH_WRITE
 ```
 
-`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE` 表示旁路 ON 的运行条件不成立，例如电机未处于 FWD/REV，或充电当前不在实际 ON 相位。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。`ERROR:MOTOR_RUNNING` 表示 FWD/REV 运行期间拒绝写堵转阈值，`ERROR:FLASH_WRITE` 表示非易失写入或写后校验失败。
+`ERROR:OVER_TEMPERATURE` 表示 NTC 保护锁存期间拒绝了危险的开启动作。`ERROR:STATE` 表示 ON 的运行条件不成立，例如电机未处于 FWD/REV、充电请求模式不是 CHARGE，或 DRIVE 子输出在非 DRIVE 模式下尝试开启。`ERROR:STATE_BUSY` 表示固件暂时无法读取共享保护状态或访问 RAM 配置；对于需要开启输出的命令，固件按安全失败处理，不会在状态未知时放行。`ERROR:MOTOR_RUNNING` 表示 FWD/REV 运行期间拒绝写堵转阈值，`ERROR:FLASH_WRITE` 表示非易失写入或写后校验失败。
 
 ### 限流电阻旁路语义
 
 - PC13（STM32F103C8T6 物理 2 脚）为推挽输出，默认低。电机先以限流电阻启动；只有状态已是 FWD/REV 时 `AT+MOTOR_BYPASS=ON` 才能拉高 PC13。STOP、BRAKE、SLEEP、堵转、过温或 FWD/REV 换向都会先恢复低电平；换向完成后必须再次发送 ON。
-- PC14（物理 3 脚）为推挽输出，默认低。只有 LM51770 处于充电周期的实际 ON 相位时 `AT+CHARGE_BYPASS=ON` 才能拉高 PC14。进入周期 OFF 相位、退出 CHARGE、切到 DRIVE、过温或任何电源路径阶段切换都会先恢复低电平；下一个 ON 相位不会自动旁路。
+- PC14（物理 3 脚）为推挽输出，默认低。请求电源模式为 CHARGE 时即可用 `AT+CHARGE_BYPASS=ON` 拉高 PC14；旁路跨周期 OFF 相位锁存，并使下一 ON 相位从开始即为全功率。退出 CHARGE、切到 DRIVE、过温、强制安全停机或复位会恢复低电平。
 - 两条 OFF 指令始终是安全关闭请求。普通 AT 指令和 UART2/UART3 通信在电机运行时仍可使用；旁路功能不是独占通信模式。
+
+### 输出状态与 DRIVE 子项联锁
+
+- `AT+OUTPUT?` 固定返回 `POWER,CHARGE_PHASE,NMOS1,NMOS2,LIGHTS,MOTOR_BYPASS,CHARGE_BYPASS`，其中 `POWER` 是请求电源模式，`CHARGE_PHASE` 是实际充电相位。
+- NMOS1、NMOS2 和 LIGHTS 只有在已请求 DRIVE 时才能开启；离开或关闭 DRIVE 会自动关闭三项。所有 OFF 请求始终允许。
 
 ### 充电时间语义
 
@@ -287,8 +293,8 @@ OK\r\n
 上位机连上 UART1 后，先发一次 `AT+VERSION?`，约定如下：
 
 - 成功回包：单行 `+VERSION:<version>` 后跟 `OK`。
-- 例：`+VERSION:release-v3.2\r\nOK\r\n`。
-- 当前上位机要求精确匹配 `release-v3.2`；匹配后使用语义化 SENSE 字段，不兼容旧的编号 NTC 字段。
+- 例：`+VERSION:release-v3.3\r\nOK\r\n`。
+- 当前上位机要求精确匹配 `release-v3.3`；匹配后使用语义化 SENSE 与完整 OUTPUT 字段，不兼容旧版本。
 - 超时建议：500 ms 之内没拿到 `OK` 即视为握手失败。
 
 ### 传感采样说明
@@ -317,7 +323,7 @@ OK\r\n
 ### 器件 NTC 过温停机
 
 - 保护使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，保护输入与 `AT+SENSE?` 发布值一致。若电池 NTC 或电池电压读取失败而五路受保护器件通道成功，保护使用正式同步窗口加本周期器件样本计算只读预览均值，但不推进窗口、不发布 SENSE。
-- 任一路严格高于 60.0°C、温度转换无效，或受保护 NTC 的 ADC 读取失败，都会锁存过温保护。触发后取消 CHARGE/DRIVE，关闭 LM51770、MP4317、NMOS1、NMOS2，并让电机进入 SLEEP；LED 保持原状态。
+- 任一路严格高于 60.0°C、温度转换无效，或受保护 NTC 的 ADC 读取失败，都会锁存过温保护。触发后取消 CHARGE/DRIVE，关闭 LM51770、MP4317、NMOS1、NMOS2、LIGHTS 与两路旁路，并让电机进入 SLEEP。
 - 停机请求通过高优先级队列发送，输出任务和电机任务还会每 100 ms 复查保护状态，阻止停机前已排队的旧开启命令重新打开输出。
 - 只有五路受保护器件温度都有效且全部不高于 55.0°C 才解除锁存。解除后仅重新允许人工命令，不自动恢复停机前的充电、驱动、NMOS 或电机状态。
 - 保护期间仍允许 OFF、MOTOR SLEEP、查询以及 `CHARGE_TIME` 设置/查询；CHARGE、DRIVE、NMOS1/2 ON 和非 SLEEP 电机模式返回 `ERROR:OVER_TEMPERATURE`。v3.2 没有新增温度阈值调参指令。

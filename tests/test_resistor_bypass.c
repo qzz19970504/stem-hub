@@ -13,10 +13,11 @@ static void TestMotorActivationRequiresRunningDirection(void)
     assert(!App_ResistorBypassMotorActivationAllowed(APP_MOTOR_MODE_STOP));
 }
 
-static void TestChargeActivationRequiresActualOutput(void)
+static void TestChargeActivationRequiresChargeMode(void)
 {
-    assert(!App_ResistorBypassChargeActivationAllowed(false));
-    assert(App_ResistorBypassChargeActivationAllowed(true));
+    assert(!App_ResistorBypassChargeActivationAllowed(APP_POWER_MODE_OFF));
+    assert(App_ResistorBypassChargeActivationAllowed(APP_POWER_MODE_CHARGE));
+    assert(!App_ResistorBypassChargeActivationAllowed(APP_POWER_MODE_DRIVE));
 }
 
 static void TestDisableRequestIsAlwaysAllowed(void)
@@ -64,7 +65,7 @@ static void TestRepeatedRunningDirectionKeepsAppliedBypass(void)
 int main(void)
 {
     TestMotorActivationRequiresRunningDirection();
-    TestChargeActivationRequiresActualOutput();
+    TestChargeActivationRequiresChargeMode();
     TestDisableRequestIsAlwaysAllowed();
     TestEnableRequestUsesActivationPolicy();
     TestNonRunningMotorTransitionRequiresReset();
