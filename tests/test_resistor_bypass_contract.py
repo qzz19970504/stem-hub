@@ -175,7 +175,11 @@ def test_pc13_has_no_unapproved_production_writer() -> None:
     write_token = "HAL_GPIO_WritePin(MOTOR_BYPASS_GPIO_Port"
 
     for source_path in ROOT.glob("**/*.c"):
-        if source_path in allowed_paths or "build" in source_path.parts:
+        if (
+            source_path in allowed_paths
+            or "build" in source_path.parts
+            or ".worktrees" in source_path.parts
+        ):
             continue
         source = source_path.read_text(encoding="utf-8", errors="ignore")
         assert write_token not in source, f"unapproved PC13 writer: {source_path}"
@@ -294,7 +298,11 @@ def test_pc14_has_no_unapproved_production_writer() -> None:
     write_token = "HAL_GPIO_WritePin(CHARGE_BYPASS_GPIO_Port"
 
     for source_path in ROOT.glob("**/*.c"):
-        if source_path in allowed_paths or "build" in source_path.parts:
+        if (
+            source_path in allowed_paths
+            or "build" in source_path.parts
+            or ".worktrees" in source_path.parts
+        ):
             continue
         source = source_path.read_text(encoding="utf-8", errors="ignore")
         assert write_token not in source, f"unapproved PC14 writer: {source_path}"
