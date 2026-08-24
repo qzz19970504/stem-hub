@@ -11,6 +11,8 @@ MOTOR_SOURCE = (ROOT / "App/Src/app_motor_task.c").read_text(encoding="utf-8")
 AT_TASK_SOURCE = (ROOT / "App/Src/app_at_task.c").read_text(encoding="utf-8")
 OUTPUT_HEADER = (ROOT / "App/Inc/app_output.h").read_text(encoding="utf-8")
 OUTPUT_SOURCE = (ROOT / "App/Src/app_output_task.c").read_text(encoding="utf-8")
+LED_SOURCE = (ROOT / "App/Src/app_led_task.c").read_text(encoding="utf-8")
+CONFIG_HEADER = (ROOT / "App/Inc/app_config.h").read_text(encoding="utf-8")
 
 
 def require(text: str, source: str, description: str) -> None:
@@ -207,20 +209,67 @@ def test_output_task_owns_and_revalidates_pc14_requests() -> None:
     )
 
 
-def test_every_applied_power_action_restores_pc14_low_first() -> None:
+def test_periodic_charge_phase_transitions_preserve_pc14_latch() -> None:
     apply_start = OUTPUT_SOURCE.index("static void App_OutputApplyPowerAction")
-    apply_end = OUTPUT_SOURCE.index("static void App_OutputShutDownAuxiliaryOutputs")
+    apply_end = OUTPUT_SOURCE.index(
+        "static void App_OutputShutDownAuxiliaryOutputs", apply_start
+    )
+
+
+def test_power_request_safety_side_effects_run_without_a_physical_mode_change() -> None:
+    apply_start = OUTPUT_SOURCE.index("static void App_OutputApplyPowerAction")
+    apply_end = OUTPUT_SOURCE.index(
+        "static void App_OutputShutDownAuxiliaryOutputs", apply_start
+    )
+    apply_source = OUTPUT_SOURCE[apply_start:apply_end]
+    assert "if (!action.apply_mode)" not in apply_source
+    require(
+        "if (action.apply_mode && App_OutputPowerRequestAllowed(action.mode))",
+        apply_source,
+        "only the physical power-path write may be skipped for an unchanged mode",
+    )
+    require(
+        "App_StateSetPowerStatus(requested_power_mode, charge_phase);",
+        apply_source,
+        "the confirmed request state must update even when GPIO power mode is unchanged",
+    )
     apply_source = OUTPUT_SOURCE[apply_start:apply_end]
     require(
-        "App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);",
+        "requested_power_mode != APP_POWER_MODE_CHARGE",
         apply_source,
-        "every OFF, CHARGE, or DRIVE action must restore precharge first",
+        "PC14 may clear only when leaving requested CHARGE mode",
     )
-    reset_index = apply_source.index(
-        "App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);"
+
+
+def test_drive_children_are_revalidated_and_cleared_by_firmware() -> None:
+    require(
+        "App_PowerPathAllowsAuxiliaryOutput(io_status.power_mode)",
+        OUTPUT_SOURCE,
+        "NMOS owner must reject ON requests outside DRIVE mode",
     )
-    power_index = apply_source.index("App_PowerPathApply")
-    assert reset_index < power_index, "PC14 must be low before power-path changes"
+    require(
+        "App_LedEnqueueState(false)",
+        OUTPUT_SOURCE,
+        "leaving DRIVE must request LIGHTS off",
+    )
+    require(
+        "App_PowerPathAllowsAuxiliaryOutput(io_status.power_mode)",
+        LED_SOURCE,
+        "LIGHTS owner must reject ON requests outside DRIVE mode",
+    )
+
+
+def test_output_query_and_v33_version_are_exposed() -> None:
+    require(
+        "case APP_AT_COMMAND_QUERY_OUTPUT:",
+        AT_TASK_SOURCE,
+        "AT task must reply to AT+OUTPUT?",
+    )
+    require(
+        'APP_FIRMWARE_VERSION "release-v3.3"',
+        CONFIG_HEADER,
+        "firmware version must advertise the v3.3 protocol",
+    )
 
 
 def test_at_task_returns_state_error_before_queueing_pc14_on() -> None:

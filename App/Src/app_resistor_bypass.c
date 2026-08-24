@@ -6,9 +6,9 @@ bool App_ResistorBypassMotorActivationAllowed(AppMotorMode mode)
         || (mode == APP_MOTOR_MODE_REVERSE);
 }
 
-bool App_ResistorBypassChargeActivationAllowed(bool charge_output_enabled)
+bool App_ResistorBypassChargeActivationAllowed(AppPowerMode power_mode)
 {
-    return charge_output_enabled;
+    return power_mode == APP_POWER_MODE_CHARGE;
 }
 
 bool App_ResistorBypassRequestAllowed(bool requested_enabled,

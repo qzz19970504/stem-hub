@@ -2,6 +2,7 @@
 
 #include "app_charge_cycle.h"
 #include "app_config.h"
+#include "app_led.h"
 #include "app_power_path.h"
 #include "app_resistor_bypass.h"
 #include "app_runtime.h"
@@ -96,20 +97,44 @@ static void App_OutputWritePowerPath(AppOutputTarget target,
 }
 
 static bool App_OutputPowerRequestAllowed(AppPowerMode mode);
+static void App_OutputShutDownAuxiliaryOutputs(void);
 
-static void App_OutputApplyPowerAction(AppChargeCycleAction action)
+static AppChargePhase App_OutputChargePhase(const AppChargeCycle *charge_cycle)
 {
-    if (!action.apply_mode)
+    if (charge_cycle == NULL)
     {
-        return;
+        return APP_CHARGE_PHASE_IDLE;
     }
 
-    App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);
-    if (App_OutputPowerRequestAllowed(action.mode))
+    switch (charge_cycle->phase)
+    {
+    case APP_CHARGE_CYCLE_ON_PHASE:
+        return APP_CHARGE_PHASE_ON;
+    case APP_CHARGE_CYCLE_OFF_PHASE:
+        return APP_CHARGE_PHASE_OFF;
+    default:
+        return APP_CHARGE_PHASE_IDLE;
+    }
+}
+
+static void App_OutputApplyPowerAction(AppChargeCycleAction action,
+                                       AppPowerMode requested_power_mode,
+                                       AppChargePhase charge_phase)
+{
+    if (requested_power_mode != APP_POWER_MODE_CHARGE)
+    {
+        App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, false);
+    }
+    if (action.apply_mode && App_OutputPowerRequestAllowed(action.mode))
     {
         (void)App_PowerPathApply(action.mode,
                                  App_OutputWritePowerPath,
                                  NULL);
+    }
+    App_StateSetPowerStatus(requested_power_mode, charge_phase);
+    if (requested_power_mode != APP_POWER_MODE_DRIVE)
+    {
+        App_OutputShutDownAuxiliaryOutputs();
     }
 }
 
@@ -117,6 +142,7 @@ static void App_OutputShutDownAuxiliaryOutputs(void)
 {
     App_OutputApplyTarget(APP_OUTPUT_TARGET_NMOS1, false);
     App_OutputApplyTarget(APP_OUTPUT_TARGET_NMOS2, false);
+    (void)App_LedEnqueueState(false);
 }
 
 static bool App_OutputPowerRequestAllowed(AppPowerMode mode)
@@ -145,7 +171,7 @@ static void App_OutputApplyChargeBypassRequest(bool enabled)
 
     if (App_OutputStateRequestAllowed(true)
         && App_StateTryGetIoStatus(&io_status)
-        && App_ResistorBypassChargeActivationAllowed(io_status.uvlo_enabled))
+        && App_ResistorBypassChargeActivationAllowed(io_status.power_mode))
     {
         App_OutputApplyTarget(APP_OUTPUT_TARGET_CHARGE_BYPASS, true);
     }
@@ -171,8 +197,9 @@ static void App_OutputForceSafe(AppChargeCycle *charge_cycle)
         charge_cycle,
         APP_POWER_MODE_OFF,
         osKernelGetTickCount());
-    App_OutputApplyPowerAction(action);
-    App_OutputShutDownAuxiliaryOutputs();
+    App_OutputApplyPowerAction(action,
+                               APP_POWER_MODE_OFF,
+                               APP_CHARGE_PHASE_IDLE);
 }
 
 static bool App_OutputThermalConstraintActive(void)
@@ -200,6 +227,7 @@ void App_NmosTask(void *argument)
         APP_THERMAL_CONSUMER_CHECK_PERIOD_MS,
         tick_frequency);
     bool thermal_safe_applied = false;
+    AppPowerMode requested_power_mode = APP_POWER_MODE_OFF;
 
     (void)argument;
 
@@ -217,6 +245,7 @@ void App_NmosTask(void *argument)
                                  NULL);
         Error_Handler();
     }
+    App_StateSetPowerStatus(APP_POWER_MODE_OFF, APP_CHARGE_PHASE_IDLE);
     if (safety_check_ticks == 0U)
     {
         safety_check_ticks = 1U;
@@ -240,7 +269,9 @@ void App_NmosTask(void *argument)
         App_OutputRefreshChargeConfiguration(&charge_cycle, tick_frequency);
         now_tick = osKernelGetTickCount();
         action = App_ChargeCyclePoll(&charge_cycle, now_tick);
-        App_OutputApplyPowerAction(action);
+        App_OutputApplyPowerAction(action,
+                                   requested_power_mode,
+                                   App_OutputChargePhase(&charge_cycle));
 
         now_tick = osKernelGetTickCount();
         wait_ticks = App_ChargeCycleWaitTicks(&charge_cycle, now_tick);
@@ -288,11 +319,10 @@ void App_NmosTask(void *argument)
             action = App_ChargeCycleRequest(&charge_cycle,
                                             request.data.power_mode,
                                             osKernelGetTickCount());
-            App_OutputApplyPowerAction(action);
-            if (request.data.power_mode == APP_POWER_MODE_OFF)
-            {
-                App_OutputShutDownAuxiliaryOutputs();
-            }
+            requested_power_mode = request.data.power_mode;
+            App_OutputApplyPowerAction(action,
+                                       requested_power_mode,
+                                       App_OutputChargePhase(&charge_cycle));
             continue;
         }
 
@@ -300,8 +330,15 @@ void App_NmosTask(void *argument)
             && App_OutputTargetAllowsDirectControl(request.data.target.target)
             && App_OutputStateRequestAllowed(request.data.target.enabled))
         {
-            App_OutputApplyTarget(request.data.target.target,
-                                  request.data.target.enabled);
+            AppIoStatus io_status;
+            bool activation_allowed = !request.data.target.enabled
+                || (App_StateTryGetIoStatus(&io_status)
+                    && App_PowerPathAllowsAuxiliaryOutput(io_status.power_mode));
+            if (activation_allowed)
+            {
+                App_OutputApplyTarget(request.data.target.target,
+                                      request.data.target.enabled);
+            }
         }
     }
 }

@@ -46,6 +46,9 @@ int main(void)
     assert(App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_NMOS2));
     assert(!App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_UVLO));
     assert(!App_OutputTargetAllowsDirectControl(APP_OUTPUT_TARGET_MP4317));
+    assert(!App_PowerPathAllowsAuxiliaryOutput(APP_POWER_MODE_OFF));
+    assert(!App_PowerPathAllowsAuxiliaryOutput(APP_POWER_MODE_CHARGE));
+    assert(App_PowerPathAllowsAuxiliaryOutput(APP_POWER_MODE_DRIVE));
 
     assert(App_PowerPathApply(APP_POWER_MODE_OFF, RecordWrite, &log));
     assert(log.count == 2U);

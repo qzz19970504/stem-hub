@@ -50,6 +50,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_motor_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_led_task.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_output_task.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_output_status.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_power_path.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_ntc_table.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../App/Src/app_batt_ntc_table.c

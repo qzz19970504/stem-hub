@@ -36,7 +36,7 @@ def adc_gpio_block(source: str, instance: str, operation: str) -> str:
     return operation_match.group("pins")
 
 
-def test_firmware_version_is_release_v3_2() -> None:
+def test_firmware_version_is_release_v3_3() -> None:
     config = read_repository_file("App/Inc/app_config.h")
     version = re.search(
         r'^\s*#define\s+APP_FIRMWARE_VERSION\s+"([^"]+)"',
@@ -44,7 +44,7 @@ def test_firmware_version_is_release_v3_2() -> None:
         re.MULTILINE,
     )
     assert version is not None
-    assert version.group(1) == "release-v3.2"
+    assert version.group(1) == "release-v3.3"
 
 
 def test_component_temperature_channels_use_physical_adc_pins() -> None:

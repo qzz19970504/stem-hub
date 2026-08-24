@@ -6,7 +6,7 @@
 #include "app_at_protocol.h"
 
 bool App_ResistorBypassMotorActivationAllowed(AppMotorMode mode);
-bool App_ResistorBypassChargeActivationAllowed(bool charge_output_enabled);
+bool App_ResistorBypassChargeActivationAllowed(AppPowerMode power_mode);
 bool App_ResistorBypassRequestAllowed(bool requested_enabled,
                                       bool activation_allowed);
 bool App_ResistorBypassMotorTransitionRequiresReset(

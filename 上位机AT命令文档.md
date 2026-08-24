@@ -2,8 +2,8 @@
 
 本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
 
-> 适用固件：`release-v3.2`
-> 接口要点：固件按固定顺序发送语义化 SENSE 字段；上位机必须精确匹配 v3.2 握手，并严格要求完整、无重复的语义字段集合，不兼容旧的编号 NTC 字段。
+> 适用固件：`release-v3.3`
+> 接口要点：固件按固定顺序发送语义化 SENSE 和 OUTPUT 字段；上位机必须精确匹配 v3.3 握手，并严格要求完整、无重复的字段集合。
 
 ## 1. 文档范围
 
@@ -21,6 +21,7 @@
 - NMOS1、NMOS2 控制
 - MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
 - 充电限流电阻旁路（PC14）
+- 完整输出状态查询与 DRIVE 子输出强制联锁
 - 60 秒周期内的充电开启时间设置与查询
 - MCU、LM51770、MP4317、DRV8874 与 LM51770 充电 MOS 五路器件温度的软件过温停机
 - 传感采样结果查询
@@ -167,7 +168,7 @@ ERROR:UNSUPPORTED
 - ERROR:PARSE：格式合法但内容不匹配当前支持的命令集
 - ERROR:SENSE_NOT_READY：传感任务尚未完成第一次有效采样
 - ERROR:LINE_TOO_LONG：一行数据超出内部缓存限制
-- ERROR:STATE：旁路 ON 的前置运行状态不成立；电机须已是 FWD/REV，充电须处于实际 ON 相位
+- ERROR:STATE：ON 的前置运行状态不成立；电机旁路须已是 FWD/REV，充电旁路须处于 CHARGE 请求模式，NMOS1/2 与 LED 须处于 DRIVE 请求模式
 - ERROR:STATE_BUSY：共享保护状态或 RAM 配置的互斥资源暂不可用；危险开启命令在保护状态未知时不会放行
 - ERROR:OVER_TEMPERATURE：NTC 过温保护已锁存，当前命令试图开启充电、驱动、NMOS1/2 或非 SLEEP 电机模式
 - ERROR:LED_QUEUE：LED 控制消息入队失败
@@ -204,13 +205,13 @@ ERROR:UNSUPPORTED
 | 电机 | AT+MOTOR=STOP\r\n | 电机停止，当前实现等同制动 | OK |
 | 电机限流 | AT+MOTOR_BYPASS=ON\r\n | 仅在 FWD/REV 已启动后拉高 PC13，短接启动限流电阻 | OK |
 | 电机限流 | AT+MOTOR_BYPASS=OFF\r\n | 拉低 PC13，恢复启动限流电阻 | OK |
-| NMOS | AT+NMOS1=ON\r\n | 打开 NMOS1 | OK |
+| NMOS | AT+NMOS1=ON\r\n | 仅在 DRIVE 模式打开 NMOS1 | OK |
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
-| NMOS | AT+NMOS2=ON\r\n | 打开 NMOS2 | OK |
+| NMOS | AT+NMOS2=ON\r\n | 仅在 DRIVE 模式打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
 | 电源路径 | AT+CHARGE=ON\r\n | 启动 60 秒周期的 LM51770 充电循环；默认 10 秒开 / 50 秒关 | OK |
 | 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
-| 充电限流 | AT+CHARGE_BYPASS=ON\r\n | 仅在 LM51770 实际 ON 相位拉高 PC14，短接充电限流电阻 | OK |
+| 充电限流 | AT+CHARGE_BYPASS=ON\r\n | 仅在请求模式为 CHARGE 时拉高 PC14，并跨周期 OFF 相位保持 | OK |
 | 充电限流 | AT+CHARGE_BYPASS=OFF\r\n | 拉低 PC14，恢复充电限流电阻 | OK |
 | 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
 | 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
@@ -225,6 +226,7 @@ ERROR:UNSUPPORTED
 | 采样 | AT+SENSE?\r\n | 查询最近传感快照；七路 1 Hz 传感 ADC 为最近五个完整周期的同步均值 |
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
+| 输出 | AT+OUTPUT?\r\n | 查询请求电源模式、充电实际相位和全部输出应用状态 |
 | 诊断 | AT+DIAG?\r\n | 查询控制链路、TX、传感任务及 UART2/UART3 RX 计数器 |
 | 充电配置 | AT+CHARGE_TIME=?\r\n | 查询 RAM 内当前配置；返回 `+CHARGE_TIME:<n>` 后跟 `OK` |
 | 电机保护 | AT+STALL_CURRENT=?\r\n | 查询当前堵转阈值；返回 `+STALL_CURRENT:<mA>` 后跟 `OK` |
@@ -460,8 +462,9 @@ AT+NMOS2=OFF
 
 说明：
 
-- ON 表示对应 GPIO 输出高电平。
+- ON 只有在请求电源模式为 DRIVE 时允许，表示对应 GPIO 输出高电平；非 DRIVE 返回 `ERROR:STATE`。
 - OFF 表示对应 GPIO 输出低电平。
+- LIGHTS 与 NMOS1、NMOS2 同属 DRIVE 子项；关闭或离开 DRIVE 时三项由固件自动关闭。
 
 #### 5.4.2 充电、驱动与全关
 
@@ -493,8 +496,8 @@ AT+CHARGE_BYPASS=OFF
 ```
 
 - PC14（STM32F103C8T6 物理 3 脚）为推挽输出，复位默认低电平，水泥限流电阻接入（预充电）。
-- 只有 LM51770 当前确实处于充电周期的 ON 相位时 ON 才返回 `OK` 并拉高 PC14；周期 OFF 相位或非 CHARGE 状态返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
-- 进入周期 OFF 相位、退出 CHARGE、切换 DRIVE、过温或任何电源阶段切换都会先拉低 PC14。下一个 ON 相位从低电平开始，不会自动恢复全功率。
+- 请求电源模式为 CHARGE 时 ON 即返回 `OK` 并拉高 PC14；不要求当前处于周期 ON 相位，非 CHARGE 返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
+- PC14 跨周期 OFF 相位保持高电平，使下一个 ON 相位从开始即为全功率。退出 CHARGE、切换 DRIVE、过温、强制安全停机或复位会拉低 PC14。
 - OFF 始终可请求恢复预充电状态。
 
 #### 5.4.4 充电时间设置与查询
@@ -517,7 +520,7 @@ OK
 #### 5.4.5 器件 NTC 软件过温停机
 
 - 判断使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整周期的同步平均值。若 BATT_NTC 或 BATT_V 读取失败而五路器件通道成功，保护使用正式同步窗口加本周期器件样本得到的只读预览均值，不推进窗口，也不发布 SENSE。
-- 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、让电机进入 SLEEP；LED 不变。
+- 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、LIGHTS 与两路旁路，并让电机进入 SLEEP。
 - 高优先级停机消息之外，输出和电机消费者每 100 ms 自检一次，保护期间不会执行旧队列里的开启命令。
 - 五路受保护器件温度必须全部有效且都不高于 55.0°C 才解除锁存。解除后需要上位机重新发送开启命令，固件不会自动恢复停机前状态。
 - 保护期间允许关闭类命令、`AT+MOTOR=SLEEP`、所有查询和 `CHARGE_TIME` 设置/查询；危险开启命令返回 `ERROR:OVER_TEMPERATURE`。没有新增温度状态查询或阈值调参 AT 指令。
@@ -664,15 +667,27 @@ OK
 - 阈值配置不改变当前运行阶段；由于只允许非运行时写入，下一次 FWD/REV 使用新值。
 - 软件停机不能替代 DRV8874 自身硬件保护、保险及机械限位。验证应使用较低阈值或可控负载，不故意制造理论 19 A 的硬堵转。
 
-### 5.8 诊断查询命令
+### 5.8 输出状态查询命令
 
-#### 5.8.1 请求格式
+请求与固定响应格式：
+
+```text
+AT+OUTPUT?
++OUTPUT:POWER=<OFF|CHARGE|DRIVE>,CHARGE_PHASE=<IDLE|ON|OFF>,NMOS1=<0|1>,NMOS2=<0|1>,LIGHTS=<0|1>,MOTOR_BYPASS=<0|1>,CHARGE_BYPASS=<0|1>
+OK
+```
+
+`POWER` 表示请求电源模式，`CHARGE_PHASE` 表示实际充电相位。其余字段均为固件已应用到 GPIO 或 LED 主开关的确认状态；字段集合与顺序固定。
+
+### 5.9 诊断查询命令
+
+#### 5.9.1 请求格式
 
 ```text
 AT+DIAG?
 ```
 
-#### 5.8.2 响应格式
+#### 5.9.2 响应格式
 
 ```text
 +DIAG:RX_ISR=<n>,RX_BYTE=<n>,RX_OVERFLOW=<n>,RX_ERR=<n>,ORE=<n>,NE=<n>,FE=<n>,PE=<n>,LINE_TOO_LONG=<n>,AT_LOOP=<n>,TX_CALL=<n>,TX_OK=<n>,TX_TIMEOUT=<n>,TX_ERR=<n>,TX_BUSY=<n>,TX_STATE_PRE=<n>,TX_STATE_POST=<n>,TX_ERR_PRE=<n>,TX_ERR_POST=<n>,TX_LAST_STATUS=<n>,SENSOR_LOOP=<n>,SENSOR_PUBLISH=<n>,SENSOR_LAST_PUBLISH_TICK=<n>,SENSOR_ADC1_READ_FAIL=<n>,SENSOR_ADC2_READ_FAIL=<n>,UART2_RX_BYTE=<n>,UART2_RX_OVERFLOW=<n>,UART3_RX_BYTE=<n>,UART3_RX_OVERFLOW=<n>
@@ -716,15 +731,15 @@ OK
 - 固件侧不阻塞、不重置这些计数器，仅在 `AT+DIAG?` 时拷快照输出。
 - v2.2 不存在 `UART_WDG` 字段，也没有 UART 静默看门狗；诊断计数器只用于观测，不参与自动恢复。
 
-### 5.9 版本查询命令（握手）
+### 5.10 版本查询命令（握手）
 
-#### 5.9.1 请求格式
+#### 5.10.1 请求格式
 
 ```text
 AT+VERSION?
 ```
 
-#### 5.9.2 响应格式
+#### 5.10.2 响应格式
 
 ```text
 +VERSION:<version>
@@ -734,13 +749,13 @@ OK
 示例：
 
 ```text
-+VERSION:release-v3.2
++VERSION:release-v3.3
 OK
 ```
 
 说明：
 
-- 用于上位机连接 UART1 后的握手；当前上位机只接受精确的 `+VERSION:release-v3.2` 后跟 `OK`。
+- 用于上位机连接 UART1 后的握手；当前上位机只接受精确的 `+VERSION:release-v3.3` 后跟 `OK`。
 - `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
 - 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
 - v3.2 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
