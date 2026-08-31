@@ -1,13 +1,14 @@
 # 上位机 AT 命令文档
 
-本文档面向上位机开发、联调和测试人员，说明当前固件支持的 AT 指令、串口收发约定、回包格式、透传规则和联调建议。
+本文档是 `release-v3.3` AT 控制面的精确协议参考，面向上位机开发、联调和测试人员。
 
 > 适用固件：`release-v3.3`
-> 接口要点：固件按固定顺序发送语义化 SENSE 和 OUTPUT 字段；上位机必须精确匹配 v3.3 握手，并严格要求完整、无重复的字段集合。
+> 接口要点：固件按固定顺序发送语义化 SENSE 和 OUTPUT 字段；上位机必须精确匹配 `release-v3.3` 握手，并严格要求完整、无重复的字段集合。
+> 产品状态模型、完整流程、产品级门控和保护恢复见：[stem-hub模块集成与使用说明](./stem-hub模块集成与使用说明.md)。现场操作见：[stem-hub模块操作说明](./stem-hub模块操作说明.md)。
 
 ## 1. 文档范围
 
-本文档描述的是当前仓库内已经实现的 AT 控制面，不包含未来规划中的功能。
+本文档是命令语法、参数范围、大小写与结束符、同步响应、异步事件、错误码和兼容写法的唯一权威，不包含未来规划。
 
 当前已覆盖：
 
@@ -17,22 +18,16 @@
 - UART2/UART3 接收数据通过异步十六进制事件回传
 - LED 总开关控制
 - 电机模式控制与状态查询
-- 电机启动限流电阻旁路（PC13）
+- 电机启动限流电阻旁路
 - NMOS1、NMOS2 控制
-- MCU 强制互锁的充电路径（LM51770）与驱动路径（MP4317）控制
-- 充电限流电阻旁路（PC14）
+- 充电路径与驱动路径控制
+- 充电限流电阻旁路
 - 完整输出状态查询与 DRIVE 子输出强制联锁
 - 60 秒周期内的充电开启时间设置与查询
-- MCU、LM51770、MP4317、DRV8874 与 LM51770 充电 MOS 五路器件温度的软件过温停机
 - 传感采样结果查询
-- nFAULT、nFLT 状态查询
+- 故障状态查询
 
-当前未覆盖：
-
-- 故障自动恢复
-- 参数持久化保存
-- AT 命令权限管理
-- AT 命令版本协商
+本文档不展开产品介绍、完整操作流程、RTOS 任务、硬件规格、产品级门控或保护恢复策略；请使用上述两份产品文档。
 
 ## 2. 串口通信约定
 
@@ -52,7 +47,7 @@ UART1、UART2、UART3 当前都使用相同配置：
 
 - UART1 是唯一的 AT 命令入口。
 - UART2 和 UART3 不解析 AT；它们是受 UART1 控制的下游收发通道。
-- UART2/UART3 的接收字节不会在中断中直接发送，而是先进入环形缓冲，再由 `bridgeTask` 封装回 UART1。
+- UART2/UART3 的接收数据以异步事件回传，格式见第 6 节。
 
 ### 2.3 行结束符
 
@@ -62,13 +57,9 @@ UART1、UART2、UART3 当前都使用相同配置：
 AT+LED=ON\r\n
 ```
 
-当前版本不接受下面这些情况：
+除明确显示 `\r\n` 的示例外，本文代码块中的命令文本均省略了可见结束符；在线上发送时仍必须追加一个 CRLF。
 
-- 没有 `\r\n` 结尾
-- 只有 `\r` 或只有 `\n`
-- 命令中夹带空格或制表符
-
-例如，下面这些写法都会被拒绝：
+AT 控制帧只在收到 CRLF 后才形成。未以 `\r\n` 结束的数据仍在接收缓冲中，固件不会立即给出 AT 错误回包；只有 `\r` 或只有 `\n` 也不会形成 AT 控制帧。上位机不得把下列格式作为错误探测手段：
 
 ```text
 AT+LED=ON
@@ -76,6 +67,16 @@ AT + LED = ON
 AT+LED = ON\r\n
 AT+LED=ON\n
 ```
+
+其中含空格或制表符的完整行不会通过 AT 候选帧筛选，可能进入兼容透传路径；是否产生下游数据取决于桥接状态。它们不是有效 AT 命令，也不应期待 `ERROR:PARSE`。
+
+### 2.3.1 长度边界与 `LINE_TOO_LONG` 恢复
+
+- 一般 AT 候选帧的协议校验要求**总长度小于 96 字节**，长度包含 CRLF。总长度为 96～127 字节的完整普通行不会成为候选 AT 帧，而是进入兼容透传路径。
+- UART1 行缓冲可累积 127 个字节；收到第 128 个字节时立即返回 `ERROR:LINE_TOO_LONG` 并清零缓冲。它不会进入“丢弃直到 CRLF”状态，溢出后的后续字节会作为新行的开头，因此残余字节可能形成另一条命令或兼容透传行。
+- 精确前缀 `AT+UARTTX=` 在候选帧筛选前走专门分支：即使总长度为 96～127 字节，只要该行最终以 CRLF 形成，解析失败也返回 `ERROR:HEX`，而不是透传或 `ERROR:PARSE`。
+
+上位机必须在发送端限制一条完整行的长度。收到 `ERROR:LINE_TOO_LONG` 后：停止发送新请求，确保当前发送已经结束并以 CRLF 收尾，排空 UART1 上的残余终止响应和异步事件，再重新执行 `AT+VERSION?` 握手与状态查询同步。若不能确定残余数据没有进入已启用的下游桥接，必须按下游协议执行恢复，或复位设备；不要简单截断后重发。
 
 ### 2.4 大小写规则
 
@@ -85,7 +86,7 @@ AT+LED=ON\n
 AT+MOTOR=FWD\r\n
 ```
 
-下面这些当前都会被拒绝：
+含小写字母的完整行同样不会通过 AT 候选帧筛选，可能进入兼容透传路径，而不是返回 `ERROR:PARSE`：
 
 ```text
 at+motor=fwd
@@ -117,6 +118,8 @@ AT 控制面采用串口请求-应答模型：
 ```text
 OK
 ```
+
+对电机、LED、NMOS、电源模式和两种旁路控制，`OK` 表示命令已被接收处理；它不保证物理输出或电机状态已完成切换。需要确认时，使用 `AT+MOTOR?` 或 `AT+OUTPUT?` 查询实际应用状态；产品级确认规则见主文档。
 
 查询类命令成功时通常返回两行：
 
@@ -160,27 +163,36 @@ ERROR:UART_DISABLED
 ERROR:UART_TX
 ERROR:MOTOR_RUNNING
 ERROR:FLASH_WRITE
+ERROR:BAD_COMMAND
+ERROR:STALL_CONFIG
+ERROR:OUTPUT_FORMAT
+ERROR:RESPONSE_TOO_LONG
 ERROR:UNSUPPORTED
 ```
 
-说明：
+错误码定义与主机处理：
 
-- ERROR:PARSE：格式合法但内容不匹配当前支持的命令集
-- ERROR:SENSE_NOT_READY：传感任务尚未完成第一次有效采样
-- ERROR:LINE_TOO_LONG：一行数据超出内部缓存限制
-- ERROR:STATE：ON 的前置运行状态不成立；电机旁路须已是 FWD/REV，充电旁路须处于 CHARGE 请求模式，NMOS1/2 与 LED 须处于 DRIVE 请求模式
-- ERROR:STATE_BUSY：共享保护状态或 RAM 配置的互斥资源暂不可用；危险开启命令在保护状态未知时不会放行
-- ERROR:OVER_TEMPERATURE：NTC 过温保护已锁存，当前命令试图开启充电、驱动、NMOS1/2 或非 SLEEP 电机模式
-- ERROR:LED_QUEUE：LED 控制消息入队失败
-- ERROR:MOTOR_QUEUE：电机控制消息入队失败
-- ERROR:OUTPUT_QUEUE：NMOS、充电电阻旁路或完整电源模式控制消息入队失败
-- ERROR:PARSE：命令帧属于 AT 格式但不匹配当前命令集；旧的独立 LM51770/MP4317 指令也返回此错误
-- ERROR:HEX：`AT+UARTTX` 的十六进制负载为空、长度非法、含非法字符或超过 32 字节
-- ERROR:UART_DISABLED：UART2 和 UART3 均未打开，无法执行 `AT+UARTTX`
-- ERROR:UART_TX：至少一个已选择目标的 HAL 串口发送失败
-- ERROR:MOTOR_RUNNING：电机正在 FWD/REV，禁止擦写堵转阈值
-- ERROR:FLASH_WRITE：堵转阈值的 Flash 擦除、编程或写后校验失败，RAM 中的生效值保持不变
-- ERROR:UNSUPPORTED：解析成功但当前版本不支持该类型
+| 错误码 | 定义 | 主机处理 |
+| --- | --- | --- |
+| `PARSE` | 一般命令仅在收到完整 CRLF 帧、总长度小于 96 字节、正文不含空格/制表符/嵌入换行和小写字母、且以精确大写 `AT+` 开头并被识别为候选 AT 控制帧后，语法或参数仍不匹配时返回。缺少 CRLF 时尚未形成一帧，不会立即返回；第 128 个行字节返回 `LINE_TOO_LONG`；未通过候选筛选的完整行进入兼容透传路径（是否产生下游数据取决于桥接状态）。精确前缀 `AT+UARTTX=` 走专门分支，负载不合法返回 `HEX`，不是 `PARSE`。 | 本地校验命令、大小写、参数和 CRLF；不要依赖错误回包发现格式错误。 |
+| `SENSE_NOT_READY` | 尚无可发布的传感快照。 | 稍后重新查询；不要把它当作状态改变。 |
+| `LINE_TOO_LONG` | 接收行超过协议缓存上限。 | 按第 2.3.1 节停止新请求、排空残余响应与异步事件，并重新握手和状态同步；简单重发不安全。 |
+| `STATE` | 命令的协议前置状态不成立。 | 用 `MOTOR?` 或 `OUTPUT?` 查询，再按产品流程决定下一步。 |
+| `STATE_BUSY` | 当前状态快照或配置资源不可用。 | 延后并重新查询/请求，不假设命令已执行。 |
+| `OVER_TEMPERATURE` | 温度保护拒绝危险开启：`CHARGE=ON`、`DRIVE=ON`、`NMOS1=ON`、`NMOS2=ON`、`MOTOR_BYPASS=ON`、`CHARGE_BYPASS=ON`，以及 `MOTOR=WAKE/FWD/REV/BRAKE/STOP`（`MOTOR=SLEEP` 不受此门控）。`LED=ON` 不属于温度门控。 | 保持安全状态并按主文档处理；不要仅凭单个 `SENSE?` 判定可恢复。 |
+| `LED_QUEUE` | LED 请求未能入队。 | 查询或延后重试。 |
+| `MOTOR_QUEUE` | 电机请求未能入队。 | 查询 `MOTOR?` 后决定是否重试。 |
+| `OUTPUT_QUEUE` | 输出或电源路径请求未能入队。 | 查询 `OUTPUT?` 后决定是否重试。 |
+| `HEX` | `UARTTX` 负载为空、非大写十六进制、长度为奇数或超过 32 字节。 | 修正并分块重发。 |
+| `UART_DISABLED` | 两个下游 UART 均未启用。 | 先打开至少一路桥接。 |
+| `UART_TX` | 至少一个已启用下游 UART 的发送失败。 | 查询桥接/下游链路后重试；结果不应视为已送达。 |
+| `MOTOR_RUNNING` | 运行中的电机禁止修改堵转阈值。 | 停止电机后重新设置。 |
+| `FLASH_WRITE` | 堵转阈值持久化写入失败。 | 重新查询当前值；避免无条件重复擦写。 |
+| `BAD_COMMAND` | 内部命令对象无效，正常串口输入不应到达。 | 记录原始帧与版本，转入维护处理。 |
+| `STALL_CONFIG` | 堵转配置服务返回未知内部状态。 | 查询当前值并转入维护处理。 |
+| `OUTPUT_FORMAT` | `OUTPUT?` 响应格式化失败。 | 记录版本和响应，稍后重试。 |
+| `RESPONSE_TOO_LONG` | `SENSE?` 响应超过内部发送缓冲。 | 记录版本和响应，稍后重试。 |
+| `UNSUPPORTED` | 命令已解析但该类型当前未实现。 | 不要重试该类型；按版本能力处理。 |
 
 ## 4. 指令总览
 
@@ -203,19 +215,19 @@ ERROR:UNSUPPORTED
 | 电机 | AT+MOTOR=REV\r\n | 电机反转 | OK |
 | 电机 | AT+MOTOR=BRAKE\r\n | 电机制动 | OK |
 | 电机 | AT+MOTOR=STOP\r\n | 电机停止，当前实现等同制动 | OK |
-| 电机限流 | AT+MOTOR_BYPASS=ON\r\n | 仅在 FWD/REV 已启动后拉高 PC13，短接启动限流电阻 | OK |
-| 电机限流 | AT+MOTOR_BYPASS=OFF\r\n | 拉低 PC13，恢复启动限流电阻 | OK |
+| 电机限流 | AT+MOTOR_BYPASS=ON\r\n | 仅在 FWD/REV 时开启电机限流旁路 | OK |
+| 电机限流 | AT+MOTOR_BYPASS=OFF\r\n | 关闭电机限流旁路 | OK |
 | NMOS | AT+NMOS1=ON\r\n | 仅在 DRIVE 模式打开 NMOS1 | OK |
 | NMOS | AT+NMOS1=OFF\r\n | 关闭 NMOS1 | OK |
 | NMOS | AT+NMOS2=ON\r\n | 仅在 DRIVE 模式打开 NMOS2 | OK |
 | NMOS | AT+NMOS2=OFF\r\n | 关闭 NMOS2 | OK |
-| 电源路径 | AT+CHARGE=ON\r\n | 启动 60 秒周期的 LM51770 充电循环；默认 10 秒开 / 50 秒关 | OK |
-| 电源路径 | AT+CHARGE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
-| 充电限流 | AT+CHARGE_BYPASS=ON\r\n | 仅在请求模式为 CHARGE 时拉高 PC14，并跨周期 OFF 相位保持 | OK |
-| 充电限流 | AT+CHARGE_BYPASS=OFF\r\n | 拉低 PC14，恢复充电限流电阻 | OK |
-| 电源路径 | AT+DRIVE=ON\r\n | 先关闭两路，再仅打开 MP4317 | OK |
-| 电源路径 | AT+DRIVE=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
-| 电源路径 | AT+POWER=OFF\r\n | 同时关闭 LM51770 与 MP4317 | OK |
+| 电源路径 | AT+CHARGE=ON\r\n | 请求 CHARGE 模式的 60 秒循环；默认 ON 为 10 秒 | OK |
+| 电源路径 | AT+CHARGE=OFF\r\n | 请求 OFF 模式 | OK |
+| 充电限流 | AT+CHARGE_BYPASS=ON\r\n | 仅在请求模式为 CHARGE 时开启充电限流旁路 | OK |
+| 充电限流 | AT+CHARGE_BYPASS=OFF\r\n | 关闭充电限流旁路 | OK |
+| 电源路径 | AT+DRIVE=ON\r\n | 请求 DRIVE 模式 | OK |
+| 电源路径 | AT+DRIVE=OFF\r\n | 请求 OFF 模式 | OK |
+| 电源路径 | AT+POWER=OFF\r\n | 请求 OFF 模式 | OK |
 | 充电配置 | AT+CHARGE_TIME=&lt;n&gt;\r\n | 设置每个周期的 ON 秒数，`n` 为 1～60 | OK |
 | 电机保护 | AT+STALL_CURRENT=&lt;mA&gt;\r\n | 设置并持久化堵转阈值，`mA` 为 1000～30000；仅限非 FWD/REV | OK |
 
@@ -223,7 +235,7 @@ ERROR:UNSUPPORTED
 
 | 分类 | 指令 | 作用 |
 | --- | --- | --- |
-| 采样 | AT+SENSE?\r\n | 查询最近传感快照；七路 1 Hz 传感 ADC 为最近五个完整周期的同步均值 |
+| 采样 | AT+SENSE?\r\n | 查询最近一次已发布的传感快照；它可能不是当前瞬时状态 |
 | 故障 | AT+FAULT?\r\n | 查询 nFAULT 和 nFLT 引脚状态 |
 | 电机 | AT+MOTOR?\r\n | 查询当前电机模式、电流与故障标志 |
 | 输出 | AT+OUTPUT?\r\n | 查询请求电源模式、充电实际相位和全部输出应用状态 |
@@ -366,11 +378,7 @@ AT+LED=ON
 OK
 ```
 
-说明：
-
-- LED1 为上电指示灯，启动后 LED1 与 LED3 交替闪烁 5 秒（自检序列），之后熄灭进入正常工作状态。
-- LED1 和 LED3 与电机方向联动（LED1 = 前进，LED3 = 后退）。原 LED2 (PA8) 已取消。
-- 这里的 ON/OFF 影响的是 LED1 和 LED3 的联动显示使能。
+说明：`ON` 仅在 `POWER` 请求模式为 `DRIVE` 时接受；否则返回 `ERROR:STATE`，共享状态不可读时返回 `ERROR:STATE_BUSY`。`OFF` 始终可请求。LED 不受温度门控，但仍受上述 DRIVE 状态门控。以 `OK` 后的 `AT+OUTPUT?` 确认，`OUTPUT.LIGHTS` 是 LED 主开关的回读字段。
 
 #### 5.2.2 关闭 LED 联动显示
 
@@ -394,10 +402,7 @@ OK
 AT+MOTOR=SLEEP
 ```
 
-说明：
-
-- nSLEEP 被拉低。
-- 电机驱动进入休眠状态。
+说明：请求电机进入 `SLEEP` 模式。
 
 #### 5.3.2 唤醒
 
@@ -405,9 +410,7 @@ AT+MOTOR=SLEEP
 AT+MOTOR=WAKE
 ```
 
-说明：
-
-- 仅唤醒驱动，不立即使能输出。
+说明：请求 `WAKE` 模式，不请求方向输出。
 
 #### 5.3.3 正转
 
@@ -415,10 +418,7 @@ AT+MOTOR=WAKE
 AT+MOTOR=FWD
 ```
 
-说明：
-
-- 若当前处于睡眠，会先 wake。
-- 若当前是反转，会先制动并等待死区时间，再切换方向。
+说明：请求 `FWD` 模式；完成状态以 `AT+MOTOR?` 为准。
 
 #### 5.3.4 反转
 
@@ -426,7 +426,7 @@ AT+MOTOR=FWD
 AT+MOTOR=REV
 ```
 
-逻辑与 FWD 类似。
+请求 `REV` 模式；完成状态以 `AT+MOTOR?` 为准。
 
 #### 5.3.5 制动与停止
 
@@ -435,7 +435,7 @@ AT+MOTOR=BRAKE
 AT+MOTOR=STOP
 ```
 
-当前版本中 STOP 与 BRAKE 的行为一致，都会让 EN 关闭并保持驱动唤醒。
+`STOP` 与 `BRAKE` 的物理 GPIO 输出可相同，但请求模式会保留；`AT+MOTOR?` 分别返回 `MODE=STOP` 或 `MODE=BRAKE`，主机不得把它们视为同一个协议状态。
 
 #### 5.3.6 电机启动限流电阻旁路
 
@@ -444,10 +444,8 @@ AT+MOTOR_BYPASS=ON
 AT+MOTOR_BYPASS=OFF
 ```
 
-- PC13（STM32F103C8T6 物理 2 脚）为推挽输出，复位默认低电平，限流电阻接入。
-- 必须先让电机进入 FWD 或 REV，随后 ON 才返回 `OK` 并拉高 PC13；其他状态下 ON 返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
-- STOP、BRAKE、SLEEP、堵转、过温和 FWD/REV 换向均自动拉低 PC13。换向后的新方向必须重新发送 ON，不能沿用换向前的旁路状态。
-- OFF 始终可请求恢复低电平。电机运行期间 UART1 的其他 AT 指令与 UART2/UART3 通信仍正常工作。
+- `ON` 仅在当前电机模式为 `FWD` 或 `REV` 时接受；否则返回 `ERROR:STATE`。状态不可读取时返回 `ERROR:STATE_BUSY`。
+- `OFF` 可随时请求。实际应用状态由 `AT+OUTPUT?` 确认。
 
 ### 5.4 NMOS 与互锁电源路径命令
 
@@ -460,11 +458,7 @@ AT+NMOS2=ON
 AT+NMOS2=OFF
 ```
 
-说明：
-
-- ON 只有在请求电源模式为 DRIVE 时允许，表示对应 GPIO 输出高电平；非 DRIVE 返回 `ERROR:STATE`。
-- OFF 表示对应 GPIO 输出低电平。
-- LIGHTS 与 NMOS1、NMOS2 同属 DRIVE 子项；关闭或离开 DRIVE 时三项由固件自动关闭。
+说明：`ON` 仅在请求电源模式为 `DRIVE` 时接受；否则返回 `ERROR:STATE`。`OFF` 可请求关闭，实际状态由 `AT+OUTPUT?` 确认。
 
 #### 5.4.2 充电、驱动与全关
 
@@ -476,17 +470,7 @@ AT+DRIVE=OFF
 AT+POWER=OFF
 ```
 
-说明：
-
-- LM51770（PB3 EN/UVLO）与 MP4317（PA8）均为低电平使能。
-- 固件只允许三种物理状态：两路全关、仅 LM51770 开、仅 MP4317 开。
-- `AT+CHARGE=ON` 启动固定 60 秒周期：先把 PB3、PA8 都置为关断电平，再仅拉低 PB3 `n` 秒，随后两路全关 `60-n` 秒，然后重复；`n` 默认是 10。
-- 在任一开启段或关闭段重复发送 `AT+CHARGE=ON` 都不会重置当前阶段的截止时间。
-- CHARGE 成功回包表示循环请求已入队；上位机 CHARGE 开关表示循环已启用，不表示 PB3 此刻必为开启电平。
-- `AT+DRIVE=ON` 先把 PB3、PA8 都置为关断电平，再仅拉低 PA8。
-- `AT+CHARGE=OFF`、`AT+DRIVE=OFF`、`AT+POWER=OFF` 都立即取消充电循环并关闭两路；`AT+DRIVE=ON` 也会立即取消循环并进入驱动状态。
-- MCU 复位后保持两路全关，不自动恢复充电循环。
-- 旧的 `AT+LM51770=ON/OFF` 与 `AT+MP4317=ON/OFF` 已删除，不能绕过 MCU 互锁。
+说明：支持的请求模式为 `OFF`、`CHARGE` 与 `DRIVE`。`CHARGE=ON` 使用固定 60 秒周期，ON 时长由 `CHARGE_TIME` 决定，默认 10 秒；其余模式切换、请求与实际相位由 `AT+OUTPUT?` 返回的 `POWER` 和 `CHARGE_PHASE` 确认。旧的独立电源芯片命令不在当前命令集内。
 
 #### 5.4.3 充电限流电阻旁路
 
@@ -495,10 +479,8 @@ AT+CHARGE_BYPASS=ON
 AT+CHARGE_BYPASS=OFF
 ```
 
-- PC14（STM32F103C8T6 物理 3 脚）为推挽输出，复位默认低电平，水泥限流电阻接入（预充电）。
-- 请求电源模式为 CHARGE 时 ON 即返回 `OK` 并拉高 PC14；不要求当前处于周期 ON 相位，非 CHARGE 返回 `ERROR:STATE`，共享状态暂不可读时返回 `ERROR:STATE_BUSY`。
-- PC14 跨周期 OFF 相位保持高电平，使下一个 ON 相位从开始即为全功率。退出 CHARGE、切换 DRIVE、过温、强制安全停机或复位会拉低 PC14。
-- OFF 始终可请求恢复预充电状态。
+- `ON` 仅在请求电源模式为 `CHARGE` 时接受；否则返回 `ERROR:STATE`。状态不可读取时返回 `ERROR:STATE_BUSY`。
+- `OFF` 可随时请求。实际状态由 `AT+OUTPUT?` 确认。
 
 #### 5.4.4 充电时间设置与查询
 
@@ -514,18 +496,11 @@ OK
 - `n` 只接受十进制整数 1～60；0、61、负数、小数、空值或额外字符返回 `ERROR:PARSE`。
 - 周期固定为 60 秒，默认 10 秒 ON / 50 秒 OFF。配置只保存在 RAM，MCU 复位后恢复默认 10。
 - 运行中设置新值会立即改变查询结果，但不修改当前相位和绝对截止时间；从下一次 ON 相位开始，整个新周期使用新配置。
-- `n=60` 表示连续 ON。内部仍以 60 秒为周期边界接收后续配置，但边界处不会切换 EN，因此不会每分钟重新软启动 LM51770。
-- CHARGE 开关表示间歇循环已启用，不表示 EN 在查询时刻必然开启。
+- `n=60` 表示持续 ON。`CHARGE` 请求状态不等同于当前实际相位；用 `AT+OUTPUT?` 确认。
 
-#### 5.4.5 器件 NTC 软件过温停机
+#### 5.4.5 温度保护的协议可见性
 
-- 判断使用 MCU_C、LM51770_C、MP4317_C、DRV8874_C 和 CHARGE_MOS_C；BATT_NTC 仅显示。七路采样全部成功时，输入与 `AT+SENSE?` 相同，来自最近五个完整周期的同步平均值。若 BATT_NTC 或 BATT_V 读取失败而五路器件通道成功，保护使用正式同步窗口加本周期器件样本得到的只读预览均值，不推进窗口，也不发布 SENSE。
-- 任一路严格高于 60.0°C、转换为 `ERR`，或受保护 NTC 的 ADC 读取失败，都会锁存保护并停止 CHARGE/DRIVE、关闭 NMOS1/2、LIGHTS 与两路旁路，并让电机进入 SLEEP。
-- 高优先级停机消息之外，输出和电机消费者每 100 ms 自检一次，保护期间不会执行旧队列里的开启命令。
-- 五路受保护器件温度必须全部有效且都不高于 55.0°C 才解除锁存。解除后需要上位机重新发送开启命令，固件不会自动恢复停机前状态。
-- 保护期间允许关闭类命令、`AT+MOTOR=SLEEP`、所有查询和 `CHARGE_TIME` 设置/查询；危险开启命令返回 `ERROR:OVER_TEMPERATURE`。没有新增温度状态查询或阈值调参 AT 指令。
-
-安全边界：可调占空和 NTC 停机是软件保护，不包含充电电流、累计充电时长或硬件故障锁存，也不能替代硬件限流、功率器件选型和散热设计。查明实际电流和损坏原因前，禁止无人值守满功率带载。
+当前协议**没有**温度锁存状态查询字段。受保护的开启命令可能返回 `ERROR:OVER_TEMPERATURE`；关闭类命令、`AT+MOTOR=SLEEP`、查询和 `CHARGE_TIME` 设置/查询仍可发送。`AT+SENSE?` 是最近一次已发布的快照，可能早于当前保护状态，不能作为解除保护或重新开启的充分条件。产品级门控和恢复流程见主文档。
 
 ### 5.5 传感查询命令
 
@@ -544,43 +519,29 @@ OK
 
 字段说明：
 
-| 字段 | 含义 |
+| 字段 | 词法契约 |
 | --- | --- |
-| BATT_NTC | 电池 NTC 温度（℃），PA4 / 物理引脚 14 / ADC1 IN4；保留 1 位小数或 ERR。使用独立 3435K 表，仅显示。 |
-| BATT_V | 电池电压（ADC1 IN5），单位为伏特（V），保留 1 位小数（如 3.3V、37.0V）。已考虑 100kΩ + 5kΩ 电阻分压（实际倍率 21）。 |
-| MCU_C | MCU 温度（℃），PB1 / 物理引脚 19 / ADC2 IN9；保留 1 位小数或 ERR。 |
-| LM51770_C | LM51770 温度（℃），PA7 / 物理引脚 17 / ADC2 IN7；格式同 MCU_C。 |
-| MP4317_C | MP4317 温度（℃），PA6 / 物理引脚 16 / ADC2 IN6；格式同 MCU_C。 |
-| DRV8874_C | DRV8874 温度（℃），PA1 / 物理引脚 11 / ADC2 IN1；格式同 MCU_C。 |
-| CHARGE_MOS_C | LM51770 充电 MOS 温度（℃），PA0 / 物理引脚 10 / ADC1 IN0；格式同 MCU_C。 |
-| MOTOR_I | DRV8874 IPROPI 电流，保留 1 位小数（如 0.8A、19.0A）。0.1 A 分辨率，最高约 33.3 A（ADC 物理满量程；电机不在 FWD/REV 时固定为 0.0A）。 |
-| TICK | 本次样本写入时的系统 Tick |
-| STK_AT / STK_SENSOR / STK_MOTOR | atTask / sensorTask / motorTask 栈高水位（word），被动观测字段 |
-| TX_SP / TX_LS | 最近一次发送前的 `huart->gState` 与返回值（HAL 状态机快照），被动观测字段 |
-| COUNT | 样本计数 |
+| BATT_NTC / MCU_C / LM51770_C / MP4317_C / DRV8874_C / CHARGE_MOS_C | `-?[0-9]+\.[0-9]C`（可为负，恰一位小数）或精确 `ERR`。 |
+| BATT_V | 非负电压，格式为 `[0-9]+\.[0-9]+V`。正常语义为一位小数；格式化实现会四舍五入但不进位，边界时小数 token 可输出 `10`，故解析器必须接受它。此字段没有 `ERR` 输出分支。 |
+| MOTOR_I | 非负电流，格式为 `[0-9]+\.[0-9]A`（恰一位小数）；此字段没有 `ERR` 输出分支。 |
+| TICK / COUNT / STK_AT / STK_SENSOR / STK_MOTOR | 无符号十进制整数：`[0-9]+`。 |
+| TX_SP | 最近一次发送前的 HAL UART `gState` 原始无符号十进制值：`[0-9]+`；当前 HAL 枚举定义的值为 0、32、33、34、35、36、160、224。 |
+| TX_LS | 最近一次 `HAL_UART_Transmit` 返回值的无符号十进制：`0`=OK、`1`=ERROR、`2`=BUSY、`3`=TIMEOUT。 |
 
-五路器件 NTC 均使用 HNTC0603-103F3450FA（R25=10kΩ，B25/85=3450K）及共同拓扑 `3V3 -- NTC -- ADC测点 -- 470Ω -- GND`，共用 -40°C ~ +125°C 查找表。
+字段集合和顺序固定，整行等价于：
 
-BATT_NTC 使用独立的 3435K 系 NTC 表，与五路 HNTC0603-103F3450FA 器件表分开：
-- BATT_NTC 范围 -55°C ~ +125°C，钳位到表外时分别返回 -55.0C / 125.0C。读数为 0（开路）时钳位到 -55.0C，读数 ≥ 3300mV（短路）时返回 ERR。  
-- 五路器件 NTC 范围 -40°C ~ +125°C，钳位到表外时分别返回 -40.0C / 125.0C。读数为 0（开路）时钳位到 -40.0C，读数 ≥ 3300mV（短路）时返回 ERR。
+```text
++SENSE:BATT_NTC=<T>,BATT_V=<V>,MCU_C=<T>,LM51770_C=<T>,MP4317_C=<T>,DRV8874_C=<T>,CHARGE_MOS_C=<T>,MOTOR_I=<I>,TICK=<U>,COUNT=<U>,STK_AT=<U>,STK_SENSOR=<U>,STK_MOTOR=<U>,TX_SP=<SP>,TX_LS=<LS>\r\nOK\r\n
+```
 
-MOTOR_I 来自 DRV8874 IPROPI 镜像电流链路：  
-- 拓扑：IPROPI -- [R19=220Ω] -- GND → ADC2 IN8。
-- 公式：`I(A) = V_IPROPI(V) / (AIPROPI × R19) = V_IPROPI(V) / 0.099`，即 `I_mA = V_mV × 1000 / 99`（AIPROPI 取 450 µA/A）。
-- 寄存器输出 0.1 A 分辨率整数 (deci-A)：`motor_current_a_deci = round(mA / 100)`，上限钳到 333 (= 33.3 A)。
-- 仅当电机在 FWD/REV 时刷值；SLEEP/WAKE/BRAKE/STOP 一律为 0。  
-- 电机任务以 10 ms 周期读取该瞬时值用于堵转判定；`AT+SENSE?` 仍按传感快照的 1 Hz 节奏发布，不代表保护只有 1 Hz。
+其中 `T`、`V`、`I`、`U`、`SP`、`LS` 分别采用上表定义。示例（同时覆盖负温度、`ERR` 与计数器）：
 
-注意：
+```text
++SENSE:BATT_NTC=-5.2C,BATT_V=37.0V,MCU_C=ERR,LM51770_C=25.0C,MP4317_C=24.8C,DRV8874_C=26.1C,CHARGE_MOS_C=23.5C,MOTOR_I=0.8A,TICK=123,COUNT=7,STK_AT=0,STK_SENSOR=0,STK_MOTOR=0,TX_SP=32,TX_LS=0
+OK
+```
 
-- BATT_NTC 与五路器件 NTC 在 0~85°C 区间精度约 ±0.5°C，<0°C 因 ADC 量化误差较大（Vadc 已 < 25mV）。
-- BATT_NTC、BATT_V、MCU_C、LM51770_C、MP4317_C、DRV8874_C、CHARGE_MOS_C 组成同步七通道 1 Hz 窗口；只有七路在同一周期全部成功时才共同推进并发布，任何部分周期都不推进、不发布。每路先对最近五个完整周期的原始值求均值再换算，启动前四个完整周期按已有完整样本数计算。
-- 七个固定窗口和运行和位于静态 RAM，不在 sensorTask 栈上创建快照；单路运行和最大为 20475。
-- 字段顺序固定为 `BATT_NTC,BATT_V,MCU_C,LM51770_C,MP4317_C,DRV8874_C,CHARGE_MOS_C,MOTOR_I,TICK,COUNT,STK_AT,STK_SENSOR,STK_MOTOR,TX_SP,TX_LS`；v3.2 不提供旧编号 NTC 字段的兼容别名。
-- MOTOR_I 由电机状态产生，sensorTask 每秒最多更新一次；上次残值不影响停机显示（电机模式 ≠ FWD/REV 时强制归零）。
-- MOTOR_I 参与堵转保护，不使用五周期滑动平均。
-- 如果系统刚上电，第一次有效采样尚未完成，可能返回 ERROR:SENSE_NOT_READY。
+`SENSE` 是已发布的采样快照，可能不是当前瞬时状态；上电初期尚无快照时返回 `ERROR:SENSE_NOT_READY`。它不提供温度锁存查询，且单个快照不能作为产品保护解除的充分依据。
 
 ### 5.6 故障查询命令
 
@@ -599,8 +560,8 @@ OK
 
 字段说明：
 
-- DRV：对应 DRV8874 的 nFAULT 读取结果
-- AUX：对应另外一路 nFLT 输入读取结果
+- DRV：驱动故障输入状态
+- AUX：辅助故障输入状态
 
 当前实现中：
 
@@ -627,15 +588,16 @@ OK
 | 字段 | 含义 |
 | --- | --- |
 | MODE | 当前电机模式，可能是 SLEEP、WAKE、FWD、REV、BRAKE、STOP |
-| CURRENT_MA | 当前电流读数 |
+| CURRENT_MA | 电机监测任务最后一次写入的毫安整数读数。 |
 | OVERCURRENT | 是否已锁存过流 |
-| FAULT | 当前是否检测到驱动故障 |
+| FAULT | 电机状态快照中最近一次写入的 `drv_fault_active` 值。 |
 
 注意：
 
-- CURRENT_MA 基于 220 Ω IPROPI 链路换算 (`I_mA = V_mV × 1000 / 99`)，单位为毫安整数。Vref=3.3V 下最大量程约 33.3 A。需 0.1 A 分辨率或停机归零语义请用 `AT+SENSE?` 的 `MOTOR_I` 字段。
-- 电机启动后先屏蔽 300 ms；随后每 10 ms 采样，连续不低于当前阈值 100 ms 才转入 BRAKE 并置位 OVERCURRENT。触发时 CURRENT_MA 保留该次停机电流。
-- 新的 FWD 或 REV 均会清除旧 OVERCURRENT 锁存并允许启动；若机械堵塞仍存在，屏蔽窗口结束后会再次触发。SLEEP/WAKE/BRAKE/STOP 不清除锁存。
+- `CURRENT_MA` 只在模式为 `FWD` 或 `REV` 时由 10 ms 监测周期尝试刷新；采样或状态读取失败时会保留最后一次值，因此它不是无条件实时测量。进入其他模式的模式请求会写入 0。
+- 堵转触发后，固件写入 `MODE=BRAKE`、`OVERCURRENT=1`，并保留触发该保护的 `CURRENT_MA`；随后该值不作为连续实时电流更新。
+- `FAULT` 在每次写入电机状态时从驱动 nFAULT 采样；非 `FWD`/`REV` 时任务不会持续刷新它，因此可能陈旧。实时 nFAULT/nFLT 引脚状态请使用 `AT+FAULT?`。
+- 主机应组合 `MODE`、`OVERCURRENT`、`FAULT` 与 `CURRENT_MA` 判断电机状态，不得把任一快照字段单独当作当前运行或实时故障证明。`MOTOR_I` 是独立的 SENSE 快照字段。
 
 ### 5.7.3 堵转阈值设置与查询
 
@@ -661,11 +623,9 @@ OK
 
 语义与限制：
 
-- 默认值为 4000 mA。设置成功后写入 STM32 最后一页 1 KiB Flash；记录含 magic、格式版本和 CRC32，未初始化或校验失败时上电回退到 4000 mA。
-- FWD/REV 时设置返回 `ERROR:MOTOR_RUNNING`，避免运行期间擦写 Flash；查询始终允许。设置相同值直接返回 `OK`，不重复擦写。
-- 擦除、半字编程或写后校验失败返回 `ERROR:FLASH_WRITE`；共享状态暂不可用返回 `ERROR:STATE_BUSY`。超范围、负数、小数、带单位或其他格式返回 `ERROR:PARSE`。
-- 阈值配置不改变当前运行阶段；由于只允许非运行时写入，下一次 FWD/REV 使用新值。
-- 软件停机不能替代 DRV8874 自身硬件保护、保险及机械限位。验证应使用较低阈值或可控负载，不故意制造理论 19 A 的硬堵转。
+- 默认值为 4000 mA，设置成功后持久化保存。
+- FWD/REV 时设置返回 `ERROR:MOTOR_RUNNING`；查询始终允许。设置相同值直接返回 `OK`。
+- 超范围、负数、小数、带单位或其他格式返回 `ERROR:PARSE`；写入失败返回 `ERROR:FLASH_WRITE`；状态不可用返回 `ERROR:STATE_BUSY`。
 
 ### 5.8 输出状态查询命令
 
@@ -698,38 +658,24 @@ OK
 
 | 字段 | 含义 |
 | --- | --- |
-| RX_ISR | UART1 IRQ 总触发次数（在中断入口直接自增） |
-| RX_BYTE | RX ISR 进入 push 路径的总次数 |
+| RX_ISR | UART1 接收中断计数。 |
+| RX_BYTE | UART1 接收字节计数。 |
 | RX_OVERFLOW | 环形缓冲满时丢字节次数 |
-| RX_ERR | HAL_UART_ErrorCallback 总次数 |
-| ORE | 硬件 overrun 错误次数 |
-| NE | 噪声错误次数 |
-| FE | 帧错误次数 |
-| PE | 奇偶校验错误次数（本固件未启用校验，正常为 0） |
-| LINE_TOO_LONG | atTask 行缓冲溢出次数 |
-| AT_LOOP | atTask 主循环 acquire 成功次数（任务还活着的证据） |
-| TX_CALL | `App_RuntimeSendBytes` 调用次数，包括 AT 回包、异步事件和下游 UART 发送 |
-| TX_OK | HAL_UART_Transmit 返回 HAL_OK 次数 |
-| TX_TIMEOUT | HAL_UART_Transmit 返回 HAL_TIMEOUT 次数 |
-| TX_ERR | HAL_UART_Transmit 返回 HAL_ERROR 次数 |
-| TX_BUSY | HAL_UART_Transmit 返回 HAL_BUSY 次数 |
-| TX_STATE_PRE / TX_STATE_POST | 最近一次发送前后的 HAL UART `gState` 原始值 |
-| TX_ERR_PRE / TX_ERR_POST | 最近一次发送前后的 HAL UART `ErrorCode` 原始值 |
-| TX_LAST_STATUS | 最近一次 HAL_UART_Transmit 返回值，0/1/2/3 分别对应 OK/ERROR/BUSY/TIMEOUT |
-| SENSOR_LOOP | 传感任务循环计数 |
-| SENSOR_PUBLISH | 有效传感快照发布次数 |
-| SENSOR_LAST_PUBLISH_TICK | 最近一次发布传感快照的系统 tick |
-| SENSOR_ADC1_READ_FAIL | ADC1 采集失败次数 |
-| SENSOR_ADC2_READ_FAIL | ADC2 采集失败次数 |
-| UART2_RX_BYTE / UART3_RX_BYTE | UART2/UART3 接收中断进入字节入队路径的总次数 |
-| UART2_RX_OVERFLOW / UART3_RX_OVERFLOW | 对应接收环形缓冲已满时的丢字节次数 |
+| RX_ERR / ORE / NE / FE / PE | UART1 接收错误分类计数。 |
+| LINE_TOO_LONG | 接收行超长计数。 |
+| AT_LOOP | AT 控制循环计数。 |
+| TX_CALL / TX_OK / TX_TIMEOUT / TX_ERR / TX_BUSY | 发送调用与结果计数。 |
+| TX_STATE_PRE / TX_STATE_POST / TX_ERR_PRE / TX_ERR_POST / TX_LAST_STATUS | 最近一次发送的诊断状态。 |
+| SENSOR_LOOP / SENSOR_PUBLISH / SENSOR_LAST_PUBLISH_TICK | 传感采样与发布计数。 |
+| SENSOR_ADC1_READ_FAIL / SENSOR_ADC2_READ_FAIL | 传感采集失败计数。 |
+| UART2_RX_BYTE / UART3_RX_BYTE | 下游 UART 接收字节计数。 |
+| UART2_RX_OVERFLOW / UART3_RX_OVERFLOW | 下游 UART 接收溢出计数。 |
 
 用途：
 
 - 用于排查 “命令发出但收不到回包” 类问题。
-- 计数器从 0 开始累计，不掉电不清零。
-- 固件侧不阻塞、不重置这些计数器，仅在 `AT+DIAG?` 时拷快照输出。
-- v2.2 不存在 `UART_WDG` 字段，也没有 UART 静默看门狗；诊断计数器只用于观测，不参与自动恢复。
+- 所有诊断计数器均自本次 MCU 启动起累计；查询不会清零，MCU 复位会清零。它们是无符号计数器，长期运行可能回绕。
+- 这些字段是只读观测，不参与自动恢复。
 
 ### 5.10 版本查询命令（握手）
 
@@ -756,18 +702,16 @@ OK
 说明：
 
 - 用于上位机连接 UART1 后的握手；当前上位机只接受精确的 `+VERSION:release-v3.3` 后跟 `OK`。
-- `<version>` 在固件侧的 `app_config.h::APP_FIRMWARE_VERSION` 定义，bump 版本只需改这一行。
-- 建议超时：500 ms 之内没拿到 `OK` 即视为握手失败。
-- v3.2 使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 的 UI 状态表示间歇循环已启用。
-- v3.2 上位机严格解析语义化 SENSE 字段，不兼容旧的编号 NTC 接口。
-- v2.2 相比 v2.1 新增的 `AT+UARTTX`、`+UART2RX`、`+UART3RX` 和四个 UART2/UART3 接收诊断字段在 v3.0 中继续保留。
-- 版本号可用于命令集能力判断；v2.1 上位机不能假定固件支持双向二进制隧道，v2.2 上位机也不能假定独立电源芯片指令仍有效。
+- 建议在 500 ms 内识别终止响应；超时不表示命令必然未执行。
+- 当前版本使用 `AT+CHARGE`、`AT+DRIVE` 和 `AT+POWER=OFF`；`CHARGE=ON` 表示间歇循环请求已启用，不表示当前处于 ON 相位。
+- 当前版本严格解析语义化 SENSE 字段，不兼容旧的编号 NTC 字段。
+- 历史演进：`AT+UARTTX`、`+UART2RX`、`+UART3RX` 和 UART2/UART3 接收诊断字段在旧版本引入，并在当前版本保留。版本号用于能力判断；旧版本上位机不能假定支持当前的二进制隧道或电源路径命令集。
 
 ## 6. 双向隧道与兼容透传规则
 
 ### 6.1 推荐路径：AT 十六进制帧
 
-v2.2 上位机应使用 `AT+UARTTX=<HEX>` 发送数据。该路径具有以下性质：
+当前版本上位机应使用 `AT+UARTTX=<HEX>` 发送数据。该路径具有以下性质：
 
 - 二进制安全，包括 `0x00`、CR、LF 和 `0xFF`。
 - 不依赖负载本身携带行结束符。
@@ -776,14 +720,14 @@ v2.2 上位机应使用 `AT+UARTTX=<HEX>` 发送数据。该路径具有以下�
 
 ### 6.2 UART2/UART3 异步接收事件
 
-UART2 或 UART3 收到原始数据后，固件会在任务上下文发出：
+UART2 或 UART3 收到原始数据后，固件会发出：
 
 ```text
 +UART2RX:<HEX>\r\n
 +UART3RX:<HEX>\r\n
 ```
 
-每个事件携带 1～32 字节。事件示例：
+每个事件携带 1～32 字节。这个范围只是桥接任务一次排空的调度分块，不是下游消息或帧边界。事件示例：
 
 ```text
 +UART2RX:000D0AFF\r\n
@@ -794,12 +738,14 @@ UART2 或 UART3 收到原始数据后，固件会在任务上下文发出：
 
 - 事件可能出现在等待普通 AT 命令响应期间。
 - 事件是带来源信息的旁路数据，不是当前命令的数据行，也不结束当前请求。
-- 上位机必须先按 `UART2RX` / `UART3RX` 路由事件，再处理普通命令的响应 FIFO。
+- 上位机必须先按 `UART2RX` / `UART3RX` 路由事件，解码 HEX 后按端口拼接为字节流，再由下游协议自行重组消息或帧；不得把一个事件当作下游消息边界。
+- 同一端口只按收到的事件顺序拼接；UART2 与 UART3 事件之间没有可依赖的全局顺序。
 - 事件只包含十六进制负载，不跟随 `OK`。
+- 上报到 UART1 是尽力发送：发送失败时固件不重发，也没有事件序号或丢失通知。结合 `UART2_RX_OVERFLOW` / `UART3_RX_OVERFLOW` 与下游协议的完整性机制处理缺口。
 
 ### 6.3 兼容路径：CRLF 文本行
 
-为兼容 v2.1，UART1 上不被识别为 AT 命令的完整 CRLF 文本行仍会被转发到已打开的 UART2/UART3。例如：
+历史兼容路径：UART1 上不被识别为 AT 命令的完整 CRLF 文本行仍会被转发到已打开的 UART2/UART3。例如：
 
 ```text
 HELLO\r\n
@@ -810,7 +756,7 @@ HELLO\r\n
 
 - 依赖 CRLF 才能形成完整行。
 - 发送函数按字符串长度处理，不适合含 `0x00` 的数据。
-- 只覆盖 UART1 到下游的单向文本转发；反向数据仍通过 v2.2 异步事件返回。
+- 只覆盖 UART1 到下游的单向文本转发；反向数据仍通过本节异步事件返回。
 - 以 `AT+` 开头且被识别为控制命令的数据不会转发。
 
 ### 6.4 桥接开关与缓存
@@ -822,62 +768,34 @@ HELLO\r\n
 
 ## 7. 推荐联调顺序
 
-建议按下面顺序和固件联调：
+本节仅覆盖协议层烟雾测试；CHARGE、DRIVE、电机与安全退出的完整流程见[集成与使用说明](./stem-hub模块集成与使用说明.md)。
 
-1. 先验证串口连通性，只发控制命令，确认 UART1 能稳定收发。
-2. 打开 UART2 或 UART3，发送一帧 `AT+UARTTX=414243`，确认下游收到 ASCII `ABC`。
-3. 从下游向 UART2/UART3 发送数据，确认 UART1 收到带正确来源的 `+UART2RX` / `+UART3RX` 事件。
-4. 查询一次 AT+SENSE?，确认传感任务已开始运行。
-5. 测试 AT+MOTOR=WAKE、AT+MOTOR=FWD、AT+MOTOR? 的闭环。
-6. 最后再联动 NMOS、`AT+CHARGE`、`AT+DRIVE`、`AT+POWER=OFF` 和故障读取。
+1. 发送 `AT+VERSION?`，验证精确的 `+VERSION:release-v3.3` 与终止 `OK`。
+2. 发送 `AT+OUTPUT?`，验证固定字段集合与顺序。
+3. 发送一个安全关闭命令 `AT+LED=OFF`，再发送 `AT+OUTPUT?`，验证请求与状态查询闭环。
+4. 打开 UART2 或 UART3，向下游注入数据，验证 `+UART2RX:` 或 `+UART3RX:` 异步事件被正确分流，且不会结束在途请求。
 
-一个最小联调流程示例：
+最小示例（每行在线上均以 CRLF 结束）：
 
 ```text
+AT+VERSION?
+AT+OUTPUT?
+AT+LED=OFF
+AT+OUTPUT?
 AT+UART2=ON
-AT+UARTTX=414243
-AT+SENSE?
-AT+MOTOR=WAKE
-AT+MOTOR=FWD
-AT+MOTOR?
-AT+MOTOR=BRAKE
-AT+FAULT?
-AT+NMOS1=ON
-AT+CHARGE=ON
-AT+POWER=OFF
-AT+DRIVE=ON
 ```
 
 ## 8. 上位机实现建议
 
-### 8.1 建议的发送策略
+上位机实现仅应承担协议层职责：
 
-- 串口发送线程与接收线程分离
-- 一次只挂起一条 AT 请求，等待回包或超时
-- 对查询命令按两行响应处理，即数据行加 OK 行
-- 对超过 32 字节的隧道负载分块，上一块收到 `OK` 后再发送下一块
-- 无论是否启用桥接，UART1 接收端都应保持 CRLF 行解析，不要切换成裸字节接收
-- 优先识别并旁路处理 `+UART2RX` / `+UART3RX`，不要让异步事件占用普通命令的待响应队列
+- 串行化请求；每次只保留一个在途 AT 请求。
+- 按 CRLF 解析接收数据：`OK`、`ERROR` 或 `ERROR:<reason>` 是该请求的终止响应；查询数据行在其前出现。
+- 优先分流 `+UART2RX:` / `+UART3RX:`，这些异步事件不属于在途请求，也不终止请求。
+- 对超过 32 字节的 `UARTTX` 负载分块，并在上一块得到终止响应后再发送下一块。
+- 设置命令超时，但超时**不表示未执行**；恢复通信后使用查询命令重新建立事实状态。
 
-### 8.2 建议的超时策略
-
-可先按下面策略起步：
-
-- 普通控制命令：200 ms 到 500 ms
-- 查询命令：500 ms 到 1000 ms
-- 上电后第一次 SENSE 查询：至少延后 1 s
-
-### 8.3 建议的状态机
-
-对于上位机，建议维护以下状态：
-
-- 串口连接状态
-- UART2 透传开关状态
-- UART3 透传开关状态
-- 当前隧道分块发送队列及在途帧
-- 电机模式状态
-- 最新传感快照
-- 最新故障状态
+UI 门控、产品状态机和保护恢复属于产品层，见[集成与使用说明](./stem-hub模块集成与使用说明.md)。
 
 ## 9. 常见问题
 
@@ -892,16 +810,11 @@ AT+DRIVE=ON
 
 ### 9.2 为什么查询采样值不稳定
 
-固件已对七路同步 1 Hz 传感 ADC 使用最近五个完整周期的滑动平均，但仍可能受以下因素影响：
+`SENSE` 是最近一次已发布快照，不是实时控制状态。不要用单个 `SENSE` 响应判断保护是否已经解除；使用主文档规定的产品恢复流程。
 
-- ADC 输入本身硬件噪声较大
-- 传感任务每 1 秒才更新一次，完整窗口对应最近约 5 秒，不是高速采样接口
-- NTC 与电池电压仍受 ADC 量化、参考电压和外围电阻误差影响
-- 电机电流为了不延迟过流保护保持即时采样，因此波动不会被五周期窗口平滑
+### 9.3 为什么 CURRENT_MA 看起来不像实时电流
 
-### 9.3 为什么 CURRENT_MA 看起来不像真实电流
-
-`CURRENT_MA` 已按 DRV8874 IPROPI 镜像电流和 R19=220Ω 换算，3.3 V ADC 满量程约 33.3 A。确认 R19 实装值、ADC 参考电压和 IPROPI 连线；堵转保护默认阈值为 4000 mA，可用 `AT+STALL_CURRENT=?` 查询。
+`CURRENT_MA` 是 `MOTOR?` 的查询字段；`MOTOR_I` 属于 SENSE 快照。两者的采样时点不同，不能互相替代。
 
 ### 9.4 为什么透传数据丢了
 
